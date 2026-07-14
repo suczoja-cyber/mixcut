@@ -632,9 +632,18 @@ async function prepareAiHookSource(ffmpeg, width, height, fetchFile) {
   const raw = state.ai.rawClip;
   const inputName = `ai_raw.${getExtension(raw.file.name)}`;
   const normalizedInputName = "ai_raw_ready.mp4";
-  ffmpeg.FS("writeFile", inputName, await fetchFile(raw.file));
+  const browserReadyName = "ai_browser_ready.webm";
   try {
     updateProgress(3, "Checking and preparing the raw hook", `0 / ${selectedPreviewVariants().length} hooks`);
+    safeUnlink(ffmpeg, browserReadyName);
+    try {
+      const browserReadyData = await transcodeHookInBrowser(raw.file, width, height);
+      ffmpeg.FS("writeFile", browserReadyName, browserReadyData);
+      if (!fileExists(ffmpeg, browserReadyName)) throw new Error("The browser conversion did not create a video file.");
+      return { name: browserReadyName, data: browserReadyData.slice() };
+    } catch (browserCause) {
+      ffmpeg.FS("writeFile", inputName, await fetchFile(raw.file));
+    }
     safeUnlink(ffmpeg, normalizedInputName);
     try {
       await normalizeClip(ffmpeg, inputName, normalizedInputName, width, height);
@@ -645,6 +654,71 @@ async function prepareAiHookSource(ffmpeg, width, height, fetchFile) {
     return { name: normalizedInputName, data: ffmpeg.FS("readFile", normalizedInputName).slice() };
   } finally {
     safeUnlink(ffmpeg, inputName);
+  }
+}
+
+async function transcodeHookInBrowser(file, width, height) {
+  if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) throw new Error("Browser video conversion is unavailable.");
+  const video = document.createElement("video");
+  const canvas = document.createElement("canvas");
+  const sourceUrl = URL.createObjectURL(file);
+  canvas.width = width;
+  canvas.height = height;
+  video.src = sourceUrl;
+  video.preload = "auto";
+  video.playsInline = true;
+  video.muted = true;
+  await new Promise((resolve, reject) => {
+    video.addEventListener("loadeddata", resolve, { once: true });
+    video.addEventListener("error", () => reject(new Error("The browser could not decode this hook clip.")), { once: true });
+    video.load();
+  });
+
+  const canvasStream = canvas.captureStream(30);
+  const capture = video.captureStream || video.webkitCaptureStream;
+  const sourceStream = capture ? capture.call(video) : null;
+  sourceStream?.getAudioTracks().forEach((track) => canvasStream.addTrack(track));
+  const mimeType = ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp8", "video/webm"].find((type) => MediaRecorder.isTypeSupported(type));
+  const recorder = new MediaRecorder(canvasStream, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond: 2500000 });
+  const chunks = [];
+  recorder.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
+  const stopped = new Promise((resolve, reject) => {
+    recorder.addEventListener("stop", resolve, { once: true });
+    recorder.addEventListener("error", () => reject(new Error("The browser video conversion failed.")), { once: true });
+  });
+  const context = canvas.getContext("2d");
+  let frameRequest = 0;
+  const drawFrame = () => {
+    context.fillStyle = "#000";
+    context.fillRect(0, 0, width, height);
+    const scale = Math.min(width / video.videoWidth, height / video.videoHeight);
+    const drawWidth = video.videoWidth * scale;
+    const drawHeight = video.videoHeight * scale;
+    context.drawImage(video, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+    if (!video.ended && !video.paused) frameRequest = requestAnimationFrame(drawFrame);
+  };
+
+  try {
+    recorder.start(250);
+    await video.play();
+    drawFrame();
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("The browser video conversion timed out.")), Math.max(15000, (video.duration || 5) * 2000 + 10000));
+      video.addEventListener("ended", () => { clearTimeout(timeout); resolve(); }, { once: true });
+      video.addEventListener("error", () => { clearTimeout(timeout); reject(new Error("The hook stopped during browser conversion.")); }, { once: true });
+    });
+    if (recorder.state !== "inactive") recorder.stop();
+    await stopped;
+    const output = new Blob(chunks, { type: mimeType || "video/webm" });
+    if (!output.size) throw new Error("The browser conversion created an empty video.");
+    return new Uint8Array(await output.arrayBuffer());
+  } finally {
+    cancelAnimationFrame(frameRequest);
+    video.pause();
+    if (recorder.state !== "inactive") recorder.stop();
+    canvasStream.getTracks().forEach((track) => track.stop());
+    sourceStream?.getTracks().forEach((track) => track.stop());
+    URL.revokeObjectURL(sourceUrl);
   }
 }
 
@@ -748,7 +822,13 @@ async function createCaptionOverlay(text, style, width, height) {
 
 async function captionClip(ffmpeg, inputName, captionName, outputName) {
   const filter = "[0:v:0][1:v:0]overlay=0:0:format=auto:eof_action=repeat:repeatlast=1[v]";
-  await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", outputName);
+  const outputOptions = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
+  try {
+    await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", ...outputOptions, outputName);
+  } catch (error) {
+    safeUnlink(ffmpeg, outputName);
+    await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-filter_complex", filter, "-map", "[v]", "-map", "2:a:0", ...outputOptions, "-shortest", outputName);
+  }
   if (!fileExists(ffmpeg, outputName)) throw new Error("Caption overlay did not create a valid video.");
 }
 
