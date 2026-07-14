@@ -5,16 +5,21 @@ const partDefinitions = {
   ctas: { label: "CTAs", singular: "cta", help: "Drive the action" }
 };
 const partSets = { 2: ["hooks", "bodies"], 3: ["hooks", "bodies", "ctas"] };
-const captionStyles = [
-  { id: "creator", label: "Creator lower-third", detail: "Bold white · dark box", font: "Sans", fontFamily: "Arial, Helvetica, sans-serif", color: "#ffffff", strokeColor: null, strokeWidth: 0, boxColor: "rgba(0,0,0,.72)", position: { x: 50, y: 70 }, animation: "Fade in", extra: "box=1:boxcolor=black@0.72:boxborderw=22:x=(w-text_w)/2:y=h*0.70:alpha='if(lt(t\\,0.3)\\,t/0.3\\,1)'" },
-  { id: "impact", label: "Impact center", detail: "Yellow serif · outlined", font: "Serif", fontFamily: "Georgia, serif", color: "#F3D82E", strokeColor: "#000000", strokeWidth: 5, boxColor: null, position: { x: 50, y: 50 }, animation: "Static impact", extra: "borderw=5:bordercolor=black:x=(w-text_w)/2:y=(h-text_h)/2" },
-  { id: "clean", label: "Clean top", detail: "White · 8x blue", font: "Sans", fontFamily: "Arial, Helvetica, sans-serif", color: "#ffffff", strokeColor: null, strokeWidth: 0, boxColor: "rgba(24,56,212,.94)", position: { x: 50, y: 12 }, animation: "Pop in", extra: "box=1:boxcolor=#1838D4@0.94:boxborderw=18:x=(w-text_w)/2:y=h*0.12:enable='gte(t\\,0.18)'" }
+const captionColors = [
+  { id: "white", label: "White", color: "#FFFFFF" },
+  { id: "yellow", label: "Yellow", color: "#F3D82E" },
+  { id: "pink", label: "8x pink", color: "#FF7373" }
+];
+const captionPositions = [
+  { id: "lower", label: "Lower third", detail: "lower 70%", position: { x: 50, y: 70 } },
+  { id: "center", label: "Center", detail: "center 50%", position: { x: 50, y: 50 } },
+  { id: "top", label: "Top", detail: "top 12%", position: { x: 50, y: 12 } }
 ];
 const state = {
   files: { hooks: [], bodies: [], ctas: [] },
   partCount: 3,
   hookMode: "manual",
-  ai: { rawClip: null, copyMode: "paste", variationMode: "both", hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: captionStyles.map((style) => style.id), previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
+  ai: { rawClip: null, copyMode: "paste", variationMode: "both", fixedColor: "yellow", hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: [], previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
   zipBlob: null
 };
 const limits = { maxCombinations: 100 };
@@ -24,6 +29,7 @@ let processingStartedAt = 0;
 let processingTimer = null;
 let currentCountLabel = "";
 let previewGeneration = 0;
+state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id);
 
 if (window.location.protocol === "file:") $("fileWarning").hidden = false;
 
@@ -39,22 +45,29 @@ function activeParts() { return partSets[state.partCount]; }
 function selectedParaphrases() { return state.ai.paraphrases.filter((item) => item.selected); }
 function availableCaptionStyles() {
   if (state.ai.variationMode === "color") {
-    const palette = [
-      { label: "White", detail: "White text · dark box", color: "#ffffff", strokeColor: null, strokeWidth: 0, boxColor: "rgba(0,0,0,.72)" },
-      { label: "Yellow", detail: "Yellow text · black outline", color: "#F3D82E", strokeColor: "#000000", strokeWidth: 5, boxColor: null },
-      { label: "8x pink", detail: "Pink text · black outline", color: "#FF7373", strokeColor: "#000000", strokeWidth: 5, boxColor: null }
-    ];
-    return captionStyles.map((base, index) => styleWithExtra({ ...base, ...palette[index], position: { x: 50, y: 70 }, animation: "Fade in", font: "Sans", fontFamily: "Arial, Helvetica, sans-serif" }));
+    return captionColors.map((color) => makeCaptionStyle(color, captionPositions[0], "color"));
   }
   if (state.ai.variationMode === "position") {
-    const placements = [
-      { label: "Lower third", detail: "White text · lower 70%", position: { x: 50, y: 70 }, animation: "Fade in" },
-      { label: "Center", detail: "White text · center 50%", position: { x: 50, y: 50 }, animation: "Static impact" },
-      { label: "Top", detail: "White text · top 12%", position: { x: 50, y: 12 }, animation: "Pop in" }
-    ];
-    return captionStyles.map((base, index) => styleWithExtra({ ...base, ...placements[index], color: "#ffffff", strokeColor: null, strokeWidth: 0, boxColor: "rgba(0,0,0,.72)", font: "Sans", fontFamily: "Arial, Helvetica, sans-serif" }));
+    const color = captionColors.find((item) => item.id === state.ai.fixedColor) || captionColors[1];
+    return captionPositions.map((position) => makeCaptionStyle(color, position, "position"));
   }
-  return captionStyles.map(styleWithExtra);
+  return captionPositions.flatMap((position) => captionColors.map((color) => makeCaptionStyle(color, position, "both")));
+}
+function makeCaptionStyle(color, placement, mode) {
+  const label = mode === "color" ? color.label : mode === "position" ? placement.label : `${color.label} · ${placement.label}`;
+  return styleWithExtra({
+    id: `${color.id}-${placement.id}`,
+    label,
+    detail: `${color.label} text · ${placement.detail}`,
+    font: "Sans",
+    fontFamily: "Arial, Helvetica, sans-serif",
+    color: color.color,
+    strokeColor: "#000000",
+    strokeWidth: 5,
+    boxColor: null,
+    position: placement.position,
+    animation: "Fade in"
+  });
 }
 function styleWithExtra(style) {
   let decoration = "";
@@ -160,12 +173,15 @@ function aiHookMarkup() {
   const usingClaude = state.ai.copyMode === "claude";
   const copyText = usingClaude ? state.ai.hookText : state.ai.manualHookText;
   const styles = availableCaptionStyles();
+  const fixedColor = captionColors.find((color) => color.id === state.ai.fixedColor) || captionColors[1];
+  const variationCount = selectedParaphrases().length * styles.length;
+  const fixedColorPicker = state.ai.variationMode === "position" ? `<div class="fixed-color-picker"><span>Text color for every position</span><div role="group" aria-label="Fixed caption color">${captionColors.map((color) => `<button type="button" data-fixed-caption-color="${color.id}" class="${fixedColor.id === color.id ? "active" : ""}"><i style="--swatch:${color.color}"></i>${color.label}</button>`).join("")}</div></div>` : "";
   const review = state.ai.paraphrases.length ? `<div class="paraphrase-review"><div class="review-heading"><div><b>Choose the lines to preview</b><small>${selectedParaphrases().length} of ${state.ai.paraphrases.length} selected</small></div></div>${state.ai.paraphrases.map((item, index) => `<label class="paraphrase-option"><input type="checkbox" data-paraphrase="${item.id}" ${item.selected ? "checked" : ""}><span>${index + 1}</span><p>${escapeHtml(item.text)}</p></label>`).join("")}</div>` : "";
   return `<div class="ai-hook-panel">
     ${raw ? `<div class="raw-hook-clip"><video src="${raw.url}" muted preload="metadata"></video><div><b>${escapeHtml(raw.file.name)}</b><span>${formatBytes(raw.file.size)} · raw textless clip</span></div><button type="button" id="removeRawHook" aria-label="Remove raw hook">×</button></div>` : `<label class="drop-zone raw-hook-zone" id="rawHookDrop"><input type="file" id="rawHookInput"><span class="upload-icon">+</span><b>Add one raw, textless hook</b><small>Drop it here or <u>choose from Photos</u></small></label>`}
     <div class="ai-copy-form"><div class="copy-source-switch" role="group" aria-label="Hook text source"><button type="button" data-copy-mode="paste" class="${!usingClaude ? "active" : ""}">Paste my hook lines</button><button type="button" data-copy-mode="claude" class="${usingClaude ? "active" : ""}">Generate with Claude <span>✦</span></button></div><label for="hookText">${usingClaude ? "Original hook line" : "Your hook lines · one per line"}</label><textarea id="hookText" maxlength="${usingClaude ? 300 : 4000}" rows="${usingClaude ? 3 : 6}" placeholder="${usingClaude ? "12 years of school and nobody told me about this" : "12 years of school and nobody told me about this&#10;Nobody teaches you this in school&#10;I wish I had learned this years ago"}">${escapeHtml(copyText)}</textarea><button class="copy-action" type="button" id="${usingClaude ? "generateParaphrases" : "useManualHooks"}" ${state.ai.loading ? "disabled" : ""}>${usingClaude ? (state.ai.loading ? "Claude is writing…" : state.ai.paraphrases.length ? "Regenerate paraphrases" : "Generate paraphrases") : (state.ai.paraphrases.length ? "Replace with these hook lines" : "Use these hook lines")}<span>${usingClaude ? "✦" : "→"}</span></button>${state.ai.error ? `<p class="ai-error">${escapeHtml(state.ai.error)}</p>` : ""}<small class="privacy-note">${usingClaude ? "Only this text is sent to Claude. Your video stays in this browser." : "No API call. Blank lines are ignored and your text stays in this browser."}</small></div>
     ${review}
-    ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>What should vary?</b><small>Keep one attribute fixed, or change color and position together.</small></div><div class="variation-mode-switch" role="group" aria-label="Caption variation type"><button type="button" data-variation-mode="color" class="${state.ai.variationMode === "color" ? "active" : ""}">Color only</button><button type="button" data-variation-mode="position" class="${state.ai.variationMode === "position" ? "active" : ""}">Position only</button><button type="button" data-variation-mode="both" class="${state.ai.variationMode === "both" ? "active" : ""}">Color + position</button></div><div class="caption-style-row">${styles.map((style) => `<label class="style-pill ${state.ai.selectedStyleIds.includes(style.id) ? "selected" : ""}"><input type="checkbox" data-caption-style="${style.id}" ${state.ai.selectedStyleIds.includes(style.id) ? "checked" : ""}><b>${style.label}</b><span>${style.detail}</span><em>${style.position.x}% × ${style.position.y}% · ${style.animation}</em></label>`).join("")}</div></div>` : ""}
+    ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>What should vary?</b><small>${selectedParaphrases().length} selected hooks × ${styles.length} variations = ${variationCount} captioned hooks</small></div><div class="variation-mode-switch" role="group" aria-label="Caption variation type"><button type="button" data-variation-mode="color" class="${state.ai.variationMode === "color" ? "active" : ""}">Color only</button><button type="button" data-variation-mode="position" class="${state.ai.variationMode === "position" ? "active" : ""}">Position only</button><button type="button" data-variation-mode="both" class="${state.ai.variationMode === "both" ? "active" : ""}">Color + position</button></div>${fixedColorPicker}<div class="caption-style-row ${styles.length > 3 ? "many-styles" : ""}">${styles.map((style) => `<label class="style-pill ${state.ai.selectedStyleIds.includes(style.id) ? "selected" : ""}"><input type="checkbox" data-caption-style="${style.id}" ${state.ai.selectedStyleIds.includes(style.id) ? "checked" : ""}><b>${style.label}</b><span>${style.detail}</span><em>${style.position.x}% × ${style.position.y}% · ${style.animation}</em></label>`).join("")}</div></div>` : ""}
     ${previewGridMarkup()}
   </div>`;
 }
@@ -229,7 +245,15 @@ function bindAiEvents() {
   if ($("useManualHooks")) $("useManualHooks").addEventListener("click", applyManualHookLines);
   document.querySelectorAll("[data-variation-mode]").forEach((button) => button.addEventListener("click", () => {
     state.ai.variationMode = button.dataset.variationMode;
-    state.ai.selectedStyleIds = captionStyles.map((style) => style.id);
+    state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id);
+    syncPreviewVariants();
+    resetResult();
+    render();
+    refreshAiPreviews(false);
+  }));
+  document.querySelectorAll("[data-fixed-caption-color]").forEach((button) => button.addEventListener("click", () => {
+    state.ai.fixedColor = button.dataset.fixedCaptionColor;
+    state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id);
     syncPreviewVariants();
     resetResult();
     render();
@@ -670,7 +694,7 @@ function safeUnlink(ffmpeg, name) { try { ffmpeg.FS("unlink", name); } catch (er
 function setBusy(busy) {
   $("generateButton").disabled = busy || !activeParts().every(isPartReady) || totalCombinations() > limits.maxCombinations;
   $("aspectRatio").disabled = busy;
-  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],[data-variation-mode],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
+  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],[data-variation-mode],[data-fixed-caption-color],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
   $("generateButton").querySelector("span").textContent = busy ? "Making your videos…" : "Make every variation";
   if (busy) updateWorkflow(3, true);
 }
