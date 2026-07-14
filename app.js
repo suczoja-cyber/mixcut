@@ -500,6 +500,89 @@ async function generateParaphrases() {
   }
 }
 
+const zipCrcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index++) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++) value = (value & 1) ? (0xEDB88320 ^ (value >>> 1)) : (value >>> 1);
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function zipCrc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let index = 0; index < bytes.length; index++) crc = zipCrcTable[(crc ^ bytes[index]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function zipDateTime(date = new Date()) {
+  const year = Math.max(1980, date.getFullYear());
+  return {
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1),
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()
+  };
+}
+
+function zipHeader(size) {
+  const bytes = new Uint8Array(size);
+  return { bytes, view: new DataView(bytes.buffer) };
+}
+
+class StoreZipBuilder {
+  constructor(folder) { this.folder = folder.replace(/\/$/, ""); this.parts = []; this.entries = []; this.offset = 0; }
+  add(fileName, data) {
+    const name = new TextEncoder().encode(`${this.folder}/${fileName}`);
+    const size = data.byteLength;
+    const crc = zipCrc32(data);
+    const stamp = zipDateTime();
+    const { bytes: header, view } = zipHeader(30);
+    view.setUint32(0, 0x04034B50, true);
+    view.setUint16(4, 20, true);
+    view.setUint16(6, 0x0800, true);
+    view.setUint16(8, 0, true);
+    view.setUint16(10, stamp.time, true);
+    view.setUint16(12, stamp.date, true);
+    view.setUint32(14, crc, true);
+    view.setUint32(18, size, true);
+    view.setUint32(22, size, true);
+    view.setUint16(26, name.length, true);
+    view.setUint16(28, 0, true);
+    this.parts.push(new Blob([header, name, data], { type: "application/octet-stream" }));
+    this.entries.push({ name, size, crc, stamp, offset: this.offset });
+    this.offset += header.length + name.length + size;
+  }
+  toBlob() {
+    const centralOffset = this.offset;
+    const centralParts = [];
+    let centralSize = 0;
+    this.entries.forEach((entry) => {
+      const { bytes: header, view } = zipHeader(46);
+      view.setUint32(0, 0x02014B50, true);
+      view.setUint16(4, 20, true);
+      view.setUint16(6, 20, true);
+      view.setUint16(8, 0x0800, true);
+      view.setUint16(10, 0, true);
+      view.setUint16(12, entry.stamp.time, true);
+      view.setUint16(14, entry.stamp.date, true);
+      view.setUint32(16, entry.crc, true);
+      view.setUint32(20, entry.size, true);
+      view.setUint32(24, entry.size, true);
+      view.setUint16(28, entry.name.length, true);
+      view.setUint32(42, entry.offset, true);
+      centralParts.push(header, entry.name);
+      centralSize += header.length + entry.name.length;
+    });
+    const { bytes: end, view } = zipHeader(22);
+    view.setUint32(0, 0x06054B50, true);
+    view.setUint16(8, this.entries.length, true);
+    view.setUint16(10, this.entries.length, true);
+    view.setUint32(12, centralSize, true);
+    view.setUint32(16, centralOffset, true);
+    return new Blob([...this.parts, ...centralParts, end], { type: "application/zip" });
+  }
+}
+
 $("generateButton").addEventListener("click", generateVideos);
 $("downloadButton").addEventListener("click", downloadZip);
 
@@ -507,7 +590,7 @@ async function generateVideos() {
   const parts = activeParts();
   const total = totalCombinations();
   if (!total || total > limits.maxCombinations || !parts.every(isPartReady)) return;
-  if (!window.FFmpeg || !window.JSZip) return showToast("The video tools couldn't load. Refresh and try again.", true);
+  if (!window.FFmpeg) return showToast("The video tools couldn't load. Refresh and try again.", true);
 
   setBusy(true);
   ffmpegLogLines = [];
@@ -576,11 +659,11 @@ async function generateVideos() {
       }
       await normalizeClip(ffmpeg, normalizationInput, outputName, width, height);
       if (browserPreparedName) safeUnlink(ffmpeg, browserPreparedName);
+      safeUnlink(ffmpeg, fileMap[clip.id]);
       normalizedMap[clip.id] = outputName;
     }
 
-    const zip = new JSZip();
-    const outputFolder = zip.folder("mixcut-variations");
+    const zip = new StoreZipBuilder("mixcut-variations");
     const combinations = cartesian(parts.map((part) => workingFiles[part]));
     let sharedTailName = null;
     let sharedTailListName = null;
@@ -592,6 +675,7 @@ async function generateVideos() {
       safeUnlink(ffmpeg, sharedTailName);
       updateProgress(29, "Preparing the shared Body + CTA once", `0 / ${total}`);
       await concatenateClips(ffmpeg, sharedNames, sharedTailListName, sharedTailName);
+      sharedNames.forEach((name) => safeUnlink(ffmpeg, name));
     }
     let currentAiHookId = null;
     for (let index = 0; index < combinations.length; index++) {
@@ -615,13 +699,13 @@ async function generateVideos() {
       } catch (cause) {
         throw processingError("Every clip was prepared, but the final videos could not be joined. Reload the page and try one variation first.", cause);
       }
-      outputFolder.file(outputName, ffmpeg.FS("readFile", outputName));
+      zip.add(outputName, ffmpeg.FS("readFile", outputName));
       safeUnlink(ffmpeg, outputName);
       safeUnlink(ffmpeg, listName);
     }
 
     updateProgress(92, "Packing everything into a ZIP", `${total} / ${total}`);
-    state.zipBlob = await zip.generateAsync({ type: "blob", compression: "STORE" }, ({ percent }) => updateProgress(92 + Math.round(percent * .08), "Packing everything into a ZIP", `${total} / ${total}`));
+    state.zipBlob = zip.toBlob();
     updateProgress(100, "Finished", `${total} / ${total}`);
     $("processTitle").textContent = "All done. Ready to test.";
     $("successCopy").textContent = `${total} ${state.partCount}-part video ${total === 1 ? "variation is" : "variations are"} ready to download.`;
