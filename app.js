@@ -562,10 +562,15 @@ async function generateVideos() {
       const percent = 45 + Math.round((index / combinations.length) * 47);
       updateProgress(percent, `Stitching ${outputName}`, `${index + 1} / ${total}`);
       const listName = `list_${index}.txt`;
-      const listText = combination.map((clip) => `file '${normalizedMap[clip.id]}'`).join("\n");
+      const inputNames = combination.map((clip) => normalizedMap[clip.id]);
+      const listText = inputNames.map((name) => `file '${name}'`).join("\n") + "\n";
       ffmpeg.FS("writeFile", listName, new TextEncoder().encode(listText));
       safeUnlink(ffmpeg, outputName);
-      await ffmpeg.run("-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", "-movflags", "+faststart", outputName);
+      try {
+        await concatenateClips(ffmpeg, inputNames, listName, outputName);
+      } catch (cause) {
+        throw processingError("Every clip was prepared, but the final videos could not be joined. Reload the page and try one variation first.", cause);
+      }
       outputFolder.file(outputName, ffmpeg.FS("readFile", outputName));
       safeUnlink(ffmpeg, outputName);
       safeUnlink(ffmpeg, listName);
@@ -644,6 +649,24 @@ async function renderAiHookClips(ffmpeg, width, height, fetchFile) {
 }
 
 function processingError(message, cause) { const error = new Error(message); error.userMessage = message; error.cause = cause; return error; }
+
+async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
+  let copied = false;
+  try {
+    await ffmpeg.run("-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", "-movflags", "+faststart", outputName);
+    copied = fileExists(ffmpeg, outputName);
+  } catch (error) {}
+  if (copied) return;
+
+  safeUnlink(ffmpeg, outputName);
+  const inputArgs = inputNames.flatMap((name) => ["-i", name]);
+  const streams = inputNames.map((_, index) => `[${index}:v:0][${index}:a:0]`).join("");
+  const filter = `${streams}concat=n=${inputNames.length}:v=1:a=1[v][a]`;
+  await ffmpeg.run(...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", outputName);
+  if (!fileExists(ffmpeg, outputName)) throw new Error("FFmpeg completed without creating the joined output file.");
+}
+
+function fileExists(ffmpeg, name) { try { return ffmpeg.FS("stat", name).size > 0; } catch (error) { return false; } }
 
 async function getVideoEngine() {
   if (ffmpegInstance?.isLoaded()) return ffmpegInstance;
