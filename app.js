@@ -19,7 +19,7 @@ const state = {
   files: { hooks: [], bodies: [], ctas: [] },
   partCount: 3,
   hookMode: "manual",
-  ai: { rawClip: null, copyMode: "paste", variationMode: "both", fixedColor: "yellow", partTextMode: "hook-only", bodyCaption: "", ctaCaption: "", hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: [], previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
+  ai: { rawClip: null, copyMode: "paste", variationMode: "both", fixedColor: "yellow", bodyTextMode: "none", ctaTextMode: "none", bodyCaption: "", ctaCaption: "", hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: [], previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
   zipBlob: null
 };
 const limits = { maxCombinations: 100 };
@@ -83,13 +83,18 @@ function styleWithExtra(style) {
 }
 function selectedStyles() { return availableCaptionStyles().filter((style) => state.ai.selectedStyleIds.includes(style.id)); }
 function selectedPreviewVariants() { return state.ai.previewVariants.filter((variant) => variant.selected); }
+function sectionTextMode(part) { return part === "bodies" ? state.ai.bodyTextMode : state.ai.ctaTextMode; }
+function sectionCaptionLines(part) { return (part === "bodies" ? state.ai.bodyCaption : state.ai.ctaCaption).split(/\r?\n/).map((line) => line.trim()).filter(Boolean); }
 function hookVariantCount() { return state.hookMode === "manual" ? state.files.hooks.length : (state.ai.rawClip && state.ai.frame ? selectedPreviewVariants().length : 0); }
-function partCountFor(part) { return part === "hooks" ? hookVariantCount() : state.files[part].length; }
+function partCountFor(part) {
+  if (part === "hooks") return hookVariantCount();
+  if (state.hookMode === "ai" && (part === "bodies" || part === "ctas") && sectionTextMode(part) === "custom") return state.files[part].length * sectionCaptionLines(part).length;
+  return state.files[part].length;
+}
 function isPartReady(part) {
   if (part !== "hooks" || state.hookMode === "manual") {
     const hasClips = state.files[part].length > 0;
-    if (state.hookMode === "ai" && state.ai.partTextMode === "all-parts" && part === "bodies") return hasClips && Boolean(state.ai.bodyCaption.trim());
-    if (state.hookMode === "ai" && state.ai.partTextMode === "all-parts" && part === "ctas") return hasClips && Boolean(state.ai.ctaCaption.trim());
+    if (state.hookMode === "ai" && (part === "bodies" || part === "ctas") && sectionTextMode(part) === "custom") return hasClips && sectionCaptionLines(part).length > 0;
     return hasClips;
   }
   return Boolean(state.ai.rawClip && state.ai.frame && selectedPreviewVariants().length);
@@ -151,7 +156,10 @@ function clipMarkup(clip, part) {
 function standardUploadMarkup(part) {
   const definition = partDefinitions[part];
   const captionValue = part === "bodies" ? state.ai.bodyCaption : state.ai.ctaCaption;
-  const captionEditor = state.hookMode === "ai" && state.ai.partTextMode === "all-parts" && (part === "bodies" || part === "ctas") ? `<label class="part-caption-editor"><span>${definition.singular === "body" ? "Body" : "CTA"} caption text</span><textarea data-part-caption="${part}" rows="3" maxlength="500" placeholder="Type the text shown during this section">${escapeHtml(captionValue)}</textarea><small>The visual style follows each selected hook style.</small></label>` : "";
+  const mode = sectionTextMode(part);
+  const lineCount = sectionCaptionLines(part).length;
+  const sectionName = definition.singular === "body" ? "Body" : "CTA";
+  const captionEditor = state.hookMode === "ai" && (part === "bodies" || part === "ctas") ? `<div class="part-caption-editor"><span>${sectionName} on-screen text</span><div class="section-text-switch" role="group" aria-label="${sectionName} text behavior"><button type="button" data-section-text-mode="none" data-section-text-part="${part}" class="${mode === "none" ? "active" : ""}">No text</button><button type="button" data-section-text-mode="same" data-section-text-part="${part}" class="${mode === "same" ? "active" : ""}">Keep hook text</button><button type="button" data-section-text-mode="custom" data-section-text-part="${part}" class="${mode === "custom" ? "active" : ""}">Different text</button></div>${mode === "custom" ? `<label><span>${sectionName} text variations · one per line</span><textarea data-part-caption="${part}" rows="4" maxlength="2000" placeholder="Version one&#10;Version two&#10;Version three">${escapeHtml(captionValue)}</textarea></label><small>${lineCount || 0} text ${lineCount === 1 ? "variation" : "variations"} × ${state.files[part].length} uploaded ${state.files[part].length === 1 ? "clip" : "clips"}. Font, color, and position follow the hook.</small>` : `<small>${mode === "same" ? "The exact hook text continues through this section." : "No caption will be added to this section."}</small>`}</div>` : "";
   return `<label class="drop-zone" data-drop="${part}"><input type="file" data-input="${part}" multiple><span class="upload-icon">+</span><b>Drop ${definition.singular} videos here</b><small>or <u>choose from Photos</u></small></label><div class="clip-list">${state.files[part].map((clip) => clipMarkup(clip, part)).join("")}</div>${captionEditor}`;
 }
 
@@ -191,7 +199,6 @@ function aiHookMarkup() {
     ${raw ? `<div class="raw-hook-clip"><video src="${raw.url}" muted preload="metadata"></video><div><b>${escapeHtml(raw.file.name)}</b><span>${formatBytes(raw.file.size)} · raw textless clip</span></div><button type="button" id="removeRawHook" aria-label="Remove raw hook">×</button></div>` : `<label class="drop-zone raw-hook-zone" id="rawHookDrop"><input type="file" id="rawHookInput" accept="video/*,.mp4,.mov,.m4v,.webm,.hevc"><span class="upload-icon">+</span><b>Add one raw, textless hook</b><small>Required for thumbnails · drop it here or <u>choose from Photos</u></small></label>`}
     <div class="ai-copy-form"><div class="copy-source-switch" role="group" aria-label="Hook text source"><button type="button" data-copy-mode="paste" class="${!usingClaude ? "active" : ""}">Paste my hook lines</button><button type="button" data-copy-mode="claude" class="${usingClaude ? "active" : ""}">Generate with Claude <span>✦</span></button></div><label for="hookText">${usingClaude ? "Original hook line" : "Your hook lines · one per line"}</label><textarea id="hookText" maxlength="${usingClaude ? 300 : 4000}" rows="${usingClaude ? 3 : 6}" placeholder="${usingClaude ? "12 years of school and nobody told me about this" : "12 years of school and nobody told me about this&#10;Nobody teaches you this in school&#10;I wish I had learned this years ago"}">${escapeHtml(copyText)}</textarea><button class="copy-action" type="button" id="${usingClaude ? "generateParaphrases" : "useManualHooks"}" ${state.ai.loading ? "disabled" : ""}>${usingClaude ? (state.ai.loading ? "Claude is writing…" : state.ai.paraphrases.length ? "Regenerate paraphrases" : "Generate paraphrases") : (state.ai.paraphrases.length ? "Replace with these hook lines" : "Use these hook lines")}<span>${usingClaude ? "✦" : "→"}</span></button>${state.ai.error ? `<p class="ai-error">${escapeHtml(state.ai.error)}</p>` : ""}<small class="privacy-note">${usingClaude ? "Only this text is sent to Claude. Your video stays in this browser." : "No API call. Blank lines are ignored and your text stays in this browser."}</small></div>
     ${review}
-    <div class="part-text-choice"><div><b>Which sections should show changing text?</b><small>Choose whether captions stop after the hook or change for each video section.</small></div><div class="copy-source-switch" role="group" aria-label="Captioned video sections"><button type="button" data-part-text-mode="hook-only" class="${state.ai.partTextMode === "hook-only" ? "active" : ""}">Hook text only</button><button type="button" data-part-text-mode="all-parts" class="${state.ai.partTextMode === "all-parts" ? "active" : ""}">${state.partCount === 2 ? "Hook + Body text" : "Hook + Body + CTA text"}</button></div>${state.ai.partTextMode === "all-parts" ? `<p>${state.partCount === 2 ? "The Body caption field appears" : "Body and CTA caption fields appear"} below. This does not multiply the number of videos.</p>` : ""}</div>
     ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>What should vary?</b><small>${selectedParaphrases().length} selected hooks × ${styles.length} variations = ${variationCount} captioned hooks</small></div><div class="variation-mode-switch" role="group" aria-label="Caption variation type"><button type="button" data-variation-mode="color" class="${state.ai.variationMode === "color" ? "active" : ""}">Color only</button><button type="button" data-variation-mode="position" class="${state.ai.variationMode === "position" ? "active" : ""}">Position only</button><button type="button" data-variation-mode="both" class="${state.ai.variationMode === "both" ? "active" : ""}">Color + position</button></div>${fixedColorPicker}<div class="caption-style-row ${styles.length > 3 ? "many-styles" : ""}">${styles.map((style) => `<label class="style-pill ${state.ai.selectedStyleIds.includes(style.id) ? "selected" : ""}"><input type="checkbox" data-caption-style="${style.id}" ${state.ai.selectedStyleIds.includes(style.id) ? "checked" : ""}><b>${style.label}</b><span>${style.detail}</span><em>${style.position.x}% × ${style.position.y}% · ${style.animation}</em></label>`).join("")}</div></div>` : ""}
     ${previewGridMarkup()}
   </div>`;
@@ -205,9 +212,10 @@ function render() {
   $("uploadGrid").innerHTML = parts.map((part, index) => {
     const definition = partDefinitions[part];
     const count = partCountFor(part);
+    const countUnit = state.hookMode === "ai" && part !== "hooks" && sectionTextMode(part) === "custom" ? (count === 1 ? "variation" : "variations") : (count === 1 ? "clip" : "clips");
     const hookSwitch = part === "hooks" ? `<div class="hook-mode-switch" role="group" aria-label="Hook source"><button type="button" data-hook-mode="manual" class="${state.hookMode === "manual" ? "active" : ""}">Upload finished hook clips</button><button type="button" data-hook-mode="ai" class="${state.hookMode === "ai" ? "active" : ""}">Create captioned hooks <span>✦</span></button></div>` : "";
     const content = part === "hooks" && state.hookMode === "ai" ? aiHookMarkup() : standardUploadMarkup(part);
-    return `<section class="upload-card ${part === "hooks" && state.hookMode === "ai" ? "ai-hook-card" : ""}" data-part="${part}"><div class="card-heading"><span class="part-number">0${index + 1}</span><div><h3>${definition.label}</h3><p>${definition.help}</p></div><span class="file-count">${count} ${count === 1 ? "clip" : "clips"}</span></div>${hookSwitch}${content}</section>`;
+    return `<section class="upload-card ${part === "hooks" && state.hookMode === "ai" ? "ai-hook-card" : ""}" data-part="${part}"><div class="card-heading"><span class="part-number">0${index + 1}</span><div><h3>${definition.label}</h3><p>${definition.help}</p></div><span class="file-count">${count} ${countUnit}</span></div>${hookSwitch}${content}</section>`;
   }).join("");
 
   bindUploadEvents();
@@ -251,7 +259,11 @@ function bindAiEvents() {
   if (rawDrop) bindDropZone(rawDrop, setRawHook);
   if ($("removeRawHook")) $("removeRawHook").addEventListener("click", removeRawHook);
   document.querySelectorAll("[data-copy-mode]").forEach((button) => button.addEventListener("click", () => { state.ai.copyMode = button.dataset.copyMode; state.ai.error = ""; render(); }));
-  document.querySelectorAll("[data-part-text-mode]").forEach((button) => button.addEventListener("click", () => { state.ai.partTextMode = button.dataset.partTextMode; resetResult(); render(); }));
+  document.querySelectorAll("[data-section-text-mode]").forEach((button) => button.addEventListener("click", () => {
+    if (button.dataset.sectionTextPart === "bodies") state.ai.bodyTextMode = button.dataset.sectionTextMode; else state.ai.ctaTextMode = button.dataset.sectionTextMode;
+    resetResult();
+    render();
+  }));
   document.querySelectorAll("[data-part-caption]").forEach((field) => {
     field.addEventListener("input", () => { if (field.dataset.partCaption === "bodies") state.ai.bodyCaption = field.value; else state.ai.ctaCaption = field.value; });
     field.addEventListener("change", () => { resetResult(); render(); });
@@ -625,10 +637,12 @@ async function generateVideos() {
     const workingFiles = { hooks: state.files.hooks, bodies: state.files.bodies, ctas: state.files.ctas };
     if (state.hookMode === "ai") {
       workingFiles.hooks = buildAiHookDescriptors();
+      workingFiles.bodies = buildSectionDescriptors("bodies");
+      workingFiles.ctas = buildSectionDescriptors("ctas");
       aiSource = await prepareAiHookSource(ffmpeg, width, height, fetchFile);
     }
 
-    const allClips = parts.flatMap((part) => workingFiles[part].filter((clip) => !clip.aiVariant).map((clip) => ({ ...clip, part })));
+    const allClips = state.hookMode === "ai" ? parts.filter((part) => part !== "hooks").flatMap((part) => state.files[part].map((clip) => ({ ...clip, part }))) : parts.flatMap((part) => workingFiles[part].map((clip) => ({ ...clip, part })));
     const fileMap = {};
     const normalizationBase = state.hookMode === "ai" ? 8 : 4;
     const normalizationSpan = state.hookMode === "ai" ? 22 : 31;
@@ -680,10 +694,10 @@ async function generateVideos() {
     const combinations = cartesian(parts.map((part) => workingFiles[part]));
     let sharedTailName = null;
     let sharedTailListName = null;
-    if (state.hookMode === "ai" && state.ai.partTextMode === "hook-only" && parts.length === 3 && workingFiles.bodies.length === 1 && workingFiles.ctas.length === 1) {
+    if (state.hookMode === "ai" && sectionTextMode("bodies") === "none" && sectionTextMode("ctas") === "none" && parts.length === 3 && workingFiles.bodies.length === 1 && workingFiles.ctas.length === 1) {
       sharedTailName = "shared_body_cta.mp4";
       sharedTailListName = "shared_body_cta.txt";
-      const sharedNames = [normalizedMap[workingFiles.bodies[0].id], normalizedMap[workingFiles.ctas[0].id]];
+      const sharedNames = [normalizedMap[workingFiles.bodies[0].sourceId], normalizedMap[workingFiles.ctas[0].sourceId]];
       ffmpeg.FS("writeFile", sharedTailListName, new TextEncoder().encode(sharedNames.map((name) => `file '${name}'`).join("\n") + "\n"));
       safeUnlink(ffmpeg, sharedTailName);
       updateProgress(29, "Preparing the shared Body + CTA once", `0 / ${total}`);
@@ -691,7 +705,6 @@ async function generateVideos() {
       sharedNames.forEach((name) => safeUnlink(ffmpeg, name));
     }
     let currentAiHookId = null;
-    let currentPartCaptionStyle = null;
     let captionedPartMap = {};
     let captionedPartNames = [];
     for (let index = 0; index < combinations.length; index++) {
@@ -699,31 +712,29 @@ async function generateVideos() {
       const outputName = combination.map((clip, partIndex) => `${partDefinitions[parts[partIndex]].singular}-${workingFiles[parts[partIndex]].indexOf(clip) + 1}`).join("_") + ".mp4";
       const percent = 30 + Math.round((index / combinations.length) * 62);
       if (state.hookMode === "ai" && combination[0].id !== currentAiHookId) {
+        captionedPartNames.forEach((name) => safeUnlink(ffmpeg, name));
+        captionedPartMap = {};
+        captionedPartNames = [];
         safeUnlink(ffmpeg, aiTemporaryHookName);
         await renderAiHookVariant(ffmpeg, aiSource, combination[0], aiTemporaryHookName, width, height, percent, index + 1, total);
         normalizedMap[combination[0].id] = aiTemporaryHookName;
         currentAiHookId = combination[0].id;
       }
-      if (state.hookMode === "ai" && state.ai.partTextMode === "all-parts" && combination[0].style.id !== currentPartCaptionStyle) {
-        captionedPartNames.forEach((name) => safeUnlink(ffmpeg, name));
-        captionedPartMap = {};
-        captionedPartNames = [];
-        currentPartCaptionStyle = combination[0].style.id;
-        for (const part of parts.filter((name) => name !== "hooks")) {
-          const captionText = part === "bodies" ? state.ai.bodyCaption.trim() : state.ai.ctaCaption.trim();
-          for (let clipIndex = 0; clipIndex < workingFiles[part].length; clipIndex++) {
-            const partClip = workingFiles[part][clipIndex];
-            const captionedName = `captioned_${part}_${clipIndex + 1}.mp4`;
-            safeUnlink(ffmpeg, captionedName);
-            await renderSectionCaption(ffmpeg, normalizedMap[partClip.id], captionText, combination[0].style, captionedName, width, height, partDefinitions[part].label, percent, index + 1, total);
-            captionedPartMap[partClip.id] = captionedName;
-            captionedPartNames.push(captionedName);
-          }
+      if (state.hookMode === "ai") {
+        for (let partIndex = 1; partIndex < combination.length; partIndex++) {
+          const partClip = combination[partIndex];
+          if (partClip.captionMode === "none" || captionedPartMap[partClip.id]) continue;
+          const captionText = partClip.captionMode === "same" ? combination[0].line.text : partClip.captionText;
+          const captionedName = `captioned_${parts[partIndex]}_${captionedPartNames.length + 1}.mp4`;
+          safeUnlink(ffmpeg, captionedName);
+          await renderSectionCaption(ffmpeg, normalizedMap[partClip.sourceId], captionText, combination[0].style, captionedName, width, height, partDefinitions[parts[partIndex]].label, percent, index + 1, total);
+          captionedPartMap[partClip.id] = captionedName;
+          captionedPartNames.push(captionedName);
         }
       }
       updateProgress(percent, `Stitching ${outputName}`, `${index + 1} / ${total}`);
       const listName = `list_${index}.txt`;
-      const inputNames = sharedTailName ? [normalizedMap[combination[0].id], sharedTailName] : combination.map((clip, partIndex) => partIndex === 0 ? normalizedMap[clip.id] : (captionedPartMap[clip.id] || normalizedMap[clip.id]));
+      const inputNames = sharedTailName ? [normalizedMap[combination[0].id], sharedTailName] : combination.map((clip, partIndex) => partIndex === 0 ? normalizedMap[clip.id] : (captionedPartMap[clip.id] || normalizedMap[clip.sourceId]));
       const listText = inputNames.map((name) => `file '${name}'`).join("\n") + "\n";
       ffmpeg.FS("writeFile", listName, new TextEncoder().encode(listText));
       safeUnlink(ffmpeg, outputName);
@@ -767,12 +778,23 @@ async function generateVideos() {
 function buildAiHookDescriptors() {
   const styles = availableCaptionStyles();
   const variants = selectedPreviewVariants().slice();
-  if (state.ai.partTextMode === "all-parts") variants.sort((first, second) => styles.findIndex((style) => style.id === first.styleId) - styles.findIndex((style) => style.id === second.styleId));
   return variants.map((variant, index) => {
     const line = state.ai.paraphrases.find((item) => item.id === variant.lineId);
     const style = styles.find((item) => item.id === variant.styleId);
     return { id: `ai-${variant.id}`, file: { name: `generated-hook-${index + 1}.mp4`, size: 0 }, aiVariant: true, line, style };
   }).filter((clip) => clip.line && clip.style);
+}
+
+function buildSectionDescriptors(part) {
+  const mode = sectionTextMode(part);
+  const lines = mode === "custom" ? sectionCaptionLines(part) : [""];
+  return state.files[part].flatMap((clip) => lines.map((text, index) => ({
+    ...clip,
+    id: `${clip.id}--${mode}-${index}`,
+    sourceId: clip.id,
+    captionMode: mode,
+    captionText: text
+  })));
 }
 
 async function prepareAiHookSource(ffmpeg, width, height, fetchFile) {
@@ -1010,7 +1032,7 @@ function safeUnlink(ffmpeg, name) { try { ffmpeg.FS("unlink", name); } catch (er
 function setBusy(busy) {
   $("generateButton").disabled = busy || !activeParts().every(isPartReady) || totalCombinations() > limits.maxCombinations;
   $("aspectRatio").disabled = busy;
-  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],[data-part-text-mode],[data-part-caption],[data-variation-mode],[data-fixed-caption-color],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
+  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],[data-section-text-mode],[data-part-caption],[data-variation-mode],[data-fixed-caption-color],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
   $("generateButton").querySelector("span").textContent = busy ? "Making your videos…" : "Make every variation";
   if (busy) updateWorkflow(3, true);
 }
