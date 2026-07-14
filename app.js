@@ -710,8 +710,8 @@ async function createCaptionOverlay(text, style, width, height) {
 }
 
 async function captionClip(ffmpeg, inputName, captionName, outputName) {
-  const filter = "[0:v:0][1:v:0]overlay=0:0:format=auto[v]";
-  await ffmpeg.run("-i", inputName, "-loop", "1", "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", "-shortest", outputName);
+  const filter = "[0:v:0][1:v:0]overlay=0:0:format=auto:eof_action=repeat:repeatlast=1[v]";
+  await ffmpeg.run("-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", outputName);
   if (!fileExists(ffmpeg, outputName)) throw new Error("Caption overlay did not create a valid video.");
 }
 
