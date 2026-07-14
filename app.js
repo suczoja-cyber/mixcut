@@ -24,7 +24,6 @@ const state = {
 };
 const limits = { maxCombinations: 100 };
 const dimensions = { vertical: [720, 1280], square: [1080, 1080], landscape: [1280, 720] };
-const lowMemoryDimensions = { vertical: [360, 640], square: [540, 540], landscape: [640, 360] };
 let ffmpegInstance = null;
 let ffmpegLogLines = [];
 let activeFfmpegCommandLogs = [];
@@ -525,8 +524,7 @@ async function generateVideos() {
   try {
     const { fetchFile } = FFmpeg;
     ffmpeg = await getVideoEngine();
-    const outputDimensions = state.hookMode === "ai" ? lowMemoryDimensions : dimensions;
-    const [width, height] = outputDimensions[$("aspectRatio").value];
+    const [width, height] = dimensions[$("aspectRatio").value];
     const workingFiles = { hooks: state.files.hooks, bodies: state.files.bodies, ctas: state.files.ctas };
     if (state.hookMode === "ai") {
       workingFiles.hooks = buildAiHookDescriptors();
@@ -679,7 +677,9 @@ async function transcodeHookInBrowser(file, width, height) {
   const sourceStream = capture ? capture.call(video) : null;
   sourceStream?.getAudioTracks().forEach((track) => canvasStream.addTrack(track));
   const mimeType = ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp8", "video/webm"].find((type) => MediaRecorder.isTypeSupported(type));
-  const recorder = new MediaRecorder(canvasStream, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond: 2500000 });
+  const pixels = width * height;
+  const videoBitsPerSecond = Math.max(8000000, Math.min(16000000, Math.round(pixels * 10)));
+  const recorder = new MediaRecorder(canvasStream, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond });
   const chunks = [];
   recorder.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
   const stopped = new Promise((resolve, reject) => {
@@ -763,7 +763,7 @@ async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
 
 async function joinClipPair(ffmpeg, firstName, secondName, outputName, baseName) {
   const filter = "[0:v:0]setpts=PTS-STARTPTS[v0];[0:a:0]asetpts=PTS-STARTPTS[a0];[1:v:0]setpts=PTS-STARTPTS[v1];[1:a:0]asetpts=PTS-STARTPTS[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]";
-  await runFfmpeg(ffmpeg, "-i", firstName, "-i", secondName, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", outputName);
+  await runFfmpeg(ffmpeg, "-i", firstName, "-i", secondName, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", outputName);
   if (!fileExists(ffmpeg, outputName)) throw new Error("A pair of prepared clips could not be joined.");
 }
 
@@ -822,7 +822,7 @@ async function createCaptionOverlay(text, style, width, height) {
 
 async function captionClip(ffmpeg, inputName, captionName, outputName) {
   const filter = "[0:v:0][1:v:0]overlay=0:0:format=auto:eof_action=repeat:repeatlast=1[v]";
-  const outputOptions = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
+  const outputOptions = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
   try {
     await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", ...outputOptions, outputName);
   } catch (error) {
@@ -833,7 +833,7 @@ async function captionClip(ffmpeg, inputName, captionName, outputName) {
 }
 
 async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter) {
-  const common = ["-vf", filter, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
+  const common = ["-vf", filter, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
   try {
     await runFfmpeg(ffmpeg, "-i", inputName, "-map", "0:v:0", "-map", "0:a:0", ...common, outputName);
   } catch (error) {
