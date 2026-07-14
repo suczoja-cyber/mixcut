@@ -14,7 +14,7 @@ const state = {
   files: { hooks: [], bodies: [], ctas: [] },
   partCount: 3,
   hookMode: "manual",
-  ai: { rawClip: null, copyMode: "paste", hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: captionStyles.map((style) => style.id), previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
+  ai: { rawClip: null, copyMode: "paste", variationMode: "both", hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: captionStyles.map((style) => style.id), previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
   zipBlob: null
 };
 const limits = { maxCombinations: 100 };
@@ -37,7 +37,36 @@ $("aspectRatio").addEventListener("change", () => { resetResult(); render(); if 
 
 function activeParts() { return partSets[state.partCount]; }
 function selectedParaphrases() { return state.ai.paraphrases.filter((item) => item.selected); }
-function selectedStyles() { return captionStyles.filter((style) => state.ai.selectedStyleIds.includes(style.id)); }
+function availableCaptionStyles() {
+  if (state.ai.variationMode === "color") {
+    const palette = [
+      { label: "White", detail: "White text · dark box", color: "#ffffff", strokeColor: null, strokeWidth: 0, boxColor: "rgba(0,0,0,.72)" },
+      { label: "Yellow", detail: "Yellow text · black outline", color: "#F3D82E", strokeColor: "#000000", strokeWidth: 5, boxColor: null },
+      { label: "8x pink", detail: "Pink text · black outline", color: "#FF7373", strokeColor: "#000000", strokeWidth: 5, boxColor: null }
+    ];
+    return captionStyles.map((base, index) => styleWithExtra({ ...base, ...palette[index], position: { x: 50, y: 70 }, animation: "Fade in", font: "Sans", fontFamily: "Arial, Helvetica, sans-serif" }));
+  }
+  if (state.ai.variationMode === "position") {
+    const placements = [
+      { label: "Lower third", detail: "White text · lower 70%", position: { x: 50, y: 70 }, animation: "Fade in" },
+      { label: "Center", detail: "White text · center 50%", position: { x: 50, y: 50 }, animation: "Static impact" },
+      { label: "Top", detail: "White text · top 12%", position: { x: 50, y: 12 }, animation: "Pop in" }
+    ];
+    return captionStyles.map((base, index) => styleWithExtra({ ...base, ...placements[index], color: "#ffffff", strokeColor: null, strokeWidth: 0, boxColor: "rgba(0,0,0,.72)", font: "Sans", fontFamily: "Arial, Helvetica, sans-serif" }));
+  }
+  return captionStyles.map(styleWithExtra);
+}
+function styleWithExtra(style) {
+  let decoration = "";
+  if (style.boxColor?.includes("24,56,212")) decoration = "box=1:boxcolor=#1838D4@0.94:boxborderw=18:";
+  else if (style.boxColor) decoration = "box=1:boxcolor=black@0.72:boxborderw=22:";
+  else if (style.strokeColor && style.strokeWidth) decoration = `borderw=${style.strokeWidth}:bordercolor=black:`;
+  let animation = "";
+  if (style.animation === "Fade in") animation = ":alpha='if(lt(t\\,0.3)\\,t/0.3\\,1)'";
+  else if (style.animation === "Pop in") animation = ":enable='gte(t\\,0.18)'";
+  return { ...style, extra: `${decoration}x=(w-text_w)/2:y=(h-text_h)*${(style.position.y / 100).toFixed(2)}${animation}` };
+}
+function selectedStyles() { return availableCaptionStyles().filter((style) => state.ai.selectedStyleIds.includes(style.id)); }
 function selectedPreviewVariants() { return state.ai.previewVariants.filter((variant) => variant.selected); }
 function hookVariantCount() { return state.hookMode === "manual" ? state.files.hooks.length : selectedPreviewVariants().length; }
 function partCountFor(part) { return part === "hooks" ? hookVariantCount() : state.files[part].length; }
@@ -118,9 +147,10 @@ function previewGridMarkup() {
   if (state.ai.previewError) return `<div class="preview-error"><b>Preview unavailable</b><span>${escapeHtml(state.ai.previewError)}</span><button type="button" id="retryPreviews">Try again</button></div>`;
   if (!state.ai.frame || !state.ai.previewVariants.length) return `<div class="preview-empty"><b>Choose at least one line and one style</b><span>Your visual combinations will appear here before rendering.</span></div>`;
   const selectedCount = selectedPreviewVariants().length;
+  const styles = availableCaptionStyles();
   return `<section class="thumbnail-review"><div class="thumbnail-review-head"><div><span class="section-tag">PREVIEW FILTER</span><b>Choose the exact hooks to render</b><small>${selectedCount} of ${state.ai.previewVariants.length} combinations selected</small></div><div><button type="button" id="selectAllPreviews">Select all</button><button type="button" id="clearAllPreviews">Clear</button></div></div><div class="thumbnail-grid">${state.ai.previewVariants.map((variant) => {
     const line = state.ai.paraphrases.find((item) => item.id === variant.lineId);
-    const style = captionStyles.find((item) => item.id === variant.styleId);
+    const style = styles.find((item) => item.id === variant.styleId);
     return `<label class="thumbnail-card ${variant.selected ? "selected" : ""}"><canvas data-preview-canvas="${variant.id}" width="${state.ai.frame.width}" height="${state.ai.frame.height}"></canvas><span class="thumbnail-toggle"><input type="checkbox" data-preview-variant="${variant.id}" ${variant.selected ? "checked" : ""}><i>✓</i></span><span class="animation-badge">${escapeHtml(style.animation)}</span><div><b>${escapeHtml(style.label)}</b><small>${escapeHtml(line.text)}</small><em>${style.position.x}% × ${style.position.y}% position</em></div></label>`;
   }).join("")}</div></section>`;
 }
@@ -129,12 +159,13 @@ function aiHookMarkup() {
   const raw = state.ai.rawClip;
   const usingClaude = state.ai.copyMode === "claude";
   const copyText = usingClaude ? state.ai.hookText : state.ai.manualHookText;
+  const styles = availableCaptionStyles();
   const review = state.ai.paraphrases.length ? `<div class="paraphrase-review"><div class="review-heading"><div><b>Choose the lines to preview</b><small>${selectedParaphrases().length} of ${state.ai.paraphrases.length} selected</small></div></div>${state.ai.paraphrases.map((item, index) => `<label class="paraphrase-option"><input type="checkbox" data-paraphrase="${item.id}" ${item.selected ? "checked" : ""}><span>${index + 1}</span><p>${escapeHtml(item.text)}</p></label>`).join("")}</div>` : "";
   return `<div class="ai-hook-panel">
     ${raw ? `<div class="raw-hook-clip"><video src="${raw.url}" muted preload="metadata"></video><div><b>${escapeHtml(raw.file.name)}</b><span>${formatBytes(raw.file.size)} · raw textless clip</span></div><button type="button" id="removeRawHook" aria-label="Remove raw hook">×</button></div>` : `<label class="drop-zone raw-hook-zone" id="rawHookDrop"><input type="file" id="rawHookInput"><span class="upload-icon">+</span><b>Add one raw, textless hook</b><small>Drop it here or <u>choose from Photos</u></small></label>`}
     <div class="ai-copy-form"><div class="copy-source-switch" role="group" aria-label="Hook text source"><button type="button" data-copy-mode="paste" class="${!usingClaude ? "active" : ""}">Paste my hook lines</button><button type="button" data-copy-mode="claude" class="${usingClaude ? "active" : ""}">Generate with Claude <span>✦</span></button></div><label for="hookText">${usingClaude ? "Original hook line" : "Your hook lines · one per line"}</label><textarea id="hookText" maxlength="${usingClaude ? 300 : 4000}" rows="${usingClaude ? 3 : 6}" placeholder="${usingClaude ? "12 years of school and nobody told me about this" : "12 years of school and nobody told me about this&#10;Nobody teaches you this in school&#10;I wish I had learned this years ago"}">${escapeHtml(copyText)}</textarea><button class="copy-action" type="button" id="${usingClaude ? "generateParaphrases" : "useManualHooks"}" ${state.ai.loading ? "disabled" : ""}>${usingClaude ? (state.ai.loading ? "Claude is writing…" : state.ai.paraphrases.length ? "Regenerate paraphrases" : "Generate paraphrases") : (state.ai.paraphrases.length ? "Replace with these hook lines" : "Use these hook lines")}<span>${usingClaude ? "✦" : "→"}</span></button>${state.ai.error ? `<p class="ai-error">${escapeHtml(state.ai.error)}</p>` : ""}<small class="privacy-note">${usingClaude ? "Only this text is sent to Claude. Your video stays in this browser." : "No API call. Blank lines are ignored and your text stays in this browser."}</small></div>
     ${review}
-    ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>Choose style presets</b><small>Font, color, position and animation are shown below.</small></div><div class="caption-style-row">${captionStyles.map((style) => `<label class="style-pill ${state.ai.selectedStyleIds.includes(style.id) ? "selected" : ""}"><input type="checkbox" data-caption-style="${style.id}" ${state.ai.selectedStyleIds.includes(style.id) ? "checked" : ""}><b>${style.label}</b><span>${style.detail}</span><em>${style.position.x}% × ${style.position.y}% · ${style.animation}</em></label>`).join("")}</div></div>` : ""}
+    ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>What should vary?</b><small>Keep one attribute fixed, or change color and position together.</small></div><div class="variation-mode-switch" role="group" aria-label="Caption variation type"><button type="button" data-variation-mode="color" class="${state.ai.variationMode === "color" ? "active" : ""}">Color only</button><button type="button" data-variation-mode="position" class="${state.ai.variationMode === "position" ? "active" : ""}">Position only</button><button type="button" data-variation-mode="both" class="${state.ai.variationMode === "both" ? "active" : ""}">Color + position</button></div><div class="caption-style-row">${styles.map((style) => `<label class="style-pill ${state.ai.selectedStyleIds.includes(style.id) ? "selected" : ""}"><input type="checkbox" data-caption-style="${style.id}" ${state.ai.selectedStyleIds.includes(style.id) ? "checked" : ""}><b>${style.label}</b><span>${style.detail}</span><em>${style.position.x}% × ${style.position.y}% · ${style.animation}</em></label>`).join("")}</div></div>` : ""}
     ${previewGridMarkup()}
   </div>`;
 }
@@ -196,6 +227,14 @@ function bindAiEvents() {
   if ($("hookText")) $("hookText").addEventListener("input", (event) => { if (state.ai.copyMode === "claude") state.ai.hookText = event.target.value; else state.ai.manualHookText = event.target.value; });
   if ($("generateParaphrases")) $("generateParaphrases").addEventListener("click", generateParaphrases);
   if ($("useManualHooks")) $("useManualHooks").addEventListener("click", applyManualHookLines);
+  document.querySelectorAll("[data-variation-mode]").forEach((button) => button.addEventListener("click", () => {
+    state.ai.variationMode = button.dataset.variationMode;
+    state.ai.selectedStyleIds = captionStyles.map((style) => style.id);
+    syncPreviewVariants();
+    resetResult();
+    render();
+    refreshAiPreviews(false);
+  }));
   document.querySelectorAll("[data-paraphrase]").forEach((checkbox) => checkbox.addEventListener("change", () => {
     const item = state.ai.paraphrases.find((candidate) => candidate.id === checkbox.dataset.paraphrase);
     if (item) item.selected = checkbox.checked;
@@ -312,10 +351,11 @@ async function paintPreviewCanvases() {
   const image = new Image();
   image.src = frame.dataUrl;
   await image.decode();
+  const styles = availableCaptionStyles();
   document.querySelectorAll("[data-preview-canvas]").forEach((canvas) => {
     const variant = state.ai.previewVariants.find((item) => item.id === canvas.dataset.previewCanvas);
     const line = variant && state.ai.paraphrases.find((item) => item.id === variant.lineId);
-    const style = variant && captionStyles.find((item) => item.id === variant.styleId);
+    const style = variant && styles.find((item) => item.id === variant.styleId);
     if (!line || !style) return;
     const context = canvas.getContext("2d");
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
@@ -517,9 +557,10 @@ async function generateVideos() {
     showToast("Your video variations are ready.");
   } catch (error) {
     console.error(error);
+    const message = error.userMessage || "A clip could not be processed. Use an H.264 MP4 source and try again.";
     $("processTitle").textContent = "We couldn't finish this batch";
-    updateProgress(0, "A clip or caption could not be rendered. Try an MP4 (H.264) source.", "Not completed");
-    showToast("Video processing failed. Try a smaller H.264 MP4 source.", true);
+    updateProgress(0, message, "Not completed");
+    showToast(message, true);
   } finally {
     stopProcessingTimer();
     setBusy(false);
@@ -530,33 +571,55 @@ async function renderAiHookClips(ffmpeg, width, height, fetchFile) {
   const variants = selectedPreviewVariants();
   const raw = state.ai.rawClip;
   const inputName = `ai_raw.${getExtension(raw.file.name)}`;
+  const normalizedInputName = "ai_raw_ready.mp4";
   ffmpeg.FS("writeFile", inputName, await fetchFile(raw.file));
   const results = [];
-  let completed = 0;
-  const variantTotal = variants.length;
-  for (const variant of variants) {
-    const line = state.ai.paraphrases.find((item) => item.id === variant.lineId);
-    const style = captionStyles.find((item) => item.id === variant.styleId);
-    const lineIndex = state.ai.paraphrases.indexOf(line);
-    const captionName = `caption_${lineIndex}_${style.id}.txt`;
-    const outputName = `ai_hook_${lineIndex + 1}_${style.id}.mp4`;
-    ffmpeg.FS("writeFile", captionName, new TextEncoder().encode(wrapCaption(line.text)));
-    const start = 3 + (completed / variantTotal) * 27;
-    const share = 27 / variantTotal;
-    updateProgress(Math.round(start), `Rendering AI hook ${completed + 1} / ${variantTotal}`, `${completed + 1} / ${variantTotal} hooks`);
-    ffmpeg.setProgress(({ ratio }) => {
-      const safeRatio = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
-      updateProgress(Math.round(start + safeRatio * share), `Rendering AI hook ${completed + 1} / ${variantTotal}`, `${completed + 1} / ${variantTotal} hooks`);
-    });
-    safeUnlink(ffmpeg, outputName);
-    await captionClip(ffmpeg, inputName, captionName, outputName, style, width, height);
-    results.push({ id: crypto.randomUUID(), file: { name: outputName, size: 0 }, preparedFsName: outputName, aiLine: line.text, style: style.id });
-    safeUnlink(ffmpeg, captionName);
-    completed++;
+  try {
+    updateProgress(3, "Checking and preparing the raw hook", `0 / ${variants.length} hooks`);
+    safeUnlink(ffmpeg, normalizedInputName);
+    try {
+      await normalizeClip(ffmpeg, inputName, normalizedInputName, width, height);
+    } catch (cause) {
+      throw processingError("The raw hook could not be decoded. On Mac, export it as an H.264 MP4 (Most Compatible), then try again.", cause);
+    }
+
+    let completed = 0;
+    const variantTotal = variants.length;
+    const styles = availableCaptionStyles();
+    for (const variant of variants) {
+      const line = state.ai.paraphrases.find((item) => item.id === variant.lineId);
+      const style = styles.find((item) => item.id === variant.styleId);
+      if (!line || !style) continue;
+      const lineIndex = state.ai.paraphrases.indexOf(line);
+      const captionName = `caption_${lineIndex}_${style.id}.txt`;
+      const outputName = `ai_hook_${lineIndex + 1}_${style.id}.mp4`;
+      ffmpeg.FS("writeFile", captionName, new TextEncoder().encode(wrapCaption(line.text)));
+      const start = 8 + (completed / variantTotal) * 22;
+      const share = 22 / variantTotal;
+      updateProgress(Math.round(start), `Rendering captioned hook ${completed + 1} / ${variantTotal}`, `${completed + 1} / ${variantTotal} hooks`);
+      ffmpeg.setProgress(({ ratio }) => {
+        const safeRatio = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
+        updateProgress(Math.round(start + safeRatio * share), `Rendering captioned hook ${completed + 1} / ${variantTotal}`, `${completed + 1} / ${variantTotal} hooks`);
+      });
+      safeUnlink(ffmpeg, outputName);
+      try {
+        await captionClip(ffmpeg, normalizedInputName, captionName, outputName, style, width, height, true);
+      } catch (cause) {
+        throw processingError("The clip was prepared, but its caption could not be rendered. Try a shorter hook line or reload the page.", cause);
+      } finally {
+        safeUnlink(ffmpeg, captionName);
+      }
+      results.push({ id: crypto.randomUUID(), file: { name: outputName, size: 0 }, preparedFsName: outputName, aiLine: line.text, style: style.id });
+      completed++;
+    }
+    return results;
+  } finally {
+    safeUnlink(ffmpeg, inputName);
+    safeUnlink(ffmpeg, normalizedInputName);
   }
-  safeUnlink(ffmpeg, inputName);
-  return results;
 }
+
+function processingError(message, cause) { const error = new Error(message); error.userMessage = message; error.cause = cause; return error; }
 
 async function getVideoEngine() {
   if (ffmpegInstance?.isLoaded()) return ffmpegInstance;
@@ -571,10 +634,10 @@ async function normalizeClip(ffmpeg, inputName, outputName, width, height) {
   await transcodeWithAudioFallback(ffmpeg, inputName, outputName, baseVideoFilter(width, height));
 }
 
-async function captionClip(ffmpeg, inputName, captionName, outputName, style, width, height) {
+async function captionClip(ffmpeg, inputName, captionName, outputName, style, width, height, alreadyNormalized = false) {
   const fontSize = Math.round(Math.min(width, height) * 0.055);
   const drawtext = `drawtext=font='${style.font}':textfile='${captionName}':fontcolor=${style.color}:fontsize=${fontSize}:line_spacing=${Math.round(fontSize * .24)}:${style.extra}`;
-  await transcodeWithAudioFallback(ffmpeg, inputName, outputName, `${baseVideoFilter(width, height)},${drawtext}`);
+  await transcodeWithAudioFallback(ffmpeg, inputName, outputName, alreadyNormalized ? drawtext : `${baseVideoFilter(width, height)},${drawtext}`);
 }
 
 async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter) {
@@ -607,7 +670,7 @@ function safeUnlink(ffmpeg, name) { try { ffmpeg.FS("unlink", name); } catch (er
 function setBusy(busy) {
   $("generateButton").disabled = busy || !activeParts().every(isPartReady) || totalCombinations() > limits.maxCombinations;
   $("aspectRatio").disabled = busy;
-  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
+  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],[data-variation-mode],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
   $("generateButton").querySelector("span").textContent = busy ? "Making your videos…" : "Make every variation";
   if (busy) updateWorkflow(3, true);
 }
