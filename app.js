@@ -520,7 +520,7 @@ async function generateVideos() {
   updateProgress(0, "Loading the video engine", `0 / ${total}`);
 
   let ffmpeg = null;
-  let aiSourceName = null;
+  let aiSource = null;
   const aiTemporaryHookName = "ai_hook_current.mp4";
   try {
     const { fetchFile } = FFmpeg;
@@ -530,7 +530,7 @@ async function generateVideos() {
     const workingFiles = { hooks: state.files.hooks, bodies: state.files.bodies, ctas: state.files.ctas };
     if (state.hookMode === "ai") {
       workingFiles.hooks = buildAiHookDescriptors();
-      aiSourceName = await prepareAiHookSource(ffmpeg, width, height, fetchFile);
+      aiSource = await prepareAiHookSource(ffmpeg, width, height, fetchFile);
     }
 
     const allClips = parts.flatMap((part) => workingFiles[part].filter((clip) => !clip.aiVariant).map((clip) => ({ ...clip, part })));
@@ -575,7 +575,7 @@ async function generateVideos() {
       const percent = 30 + Math.round((index / combinations.length) * 62);
       if (state.hookMode === "ai" && combination[0].id !== currentAiHookId) {
         safeUnlink(ffmpeg, aiTemporaryHookName);
-        await renderAiHookVariant(ffmpeg, aiSourceName, combination[0], aiTemporaryHookName, width, height, percent, index + 1, total);
+        await renderAiHookVariant(ffmpeg, aiSource, combination[0], aiTemporaryHookName, width, height, percent, index + 1, total);
         normalizedMap[combination[0].id] = aiTemporaryHookName;
         currentAiHookId = combination[0].id;
       }
@@ -612,7 +612,7 @@ async function generateVideos() {
   } finally {
     if (ffmpeg) {
       safeUnlink(ffmpeg, aiTemporaryHookName);
-      if (aiSourceName) safeUnlink(ffmpeg, aiSourceName);
+      if (aiSource) safeUnlink(ffmpeg, aiSource.name);
     }
     stopProcessingTimer();
     setBusy(false);
@@ -641,18 +641,20 @@ async function prepareAiHookSource(ffmpeg, width, height, fetchFile) {
     } catch (cause) {
       throw processingError("The raw hook could not be decoded. On Mac, export it as an H.264 MP4 (Most Compatible), then try again.", cause);
     }
-    return normalizedInputName;
+    if (!fileExists(ffmpeg, normalizedInputName)) throw new Error("The prepared raw hook file was not created.");
+    return { name: normalizedInputName, data: ffmpeg.FS("readFile", normalizedInputName).slice() };
   } finally {
     safeUnlink(ffmpeg, inputName);
   }
 }
 
-async function renderAiHookVariant(ffmpeg, sourceName, clip, outputName, width, height, progressStart, number, total) {
+async function renderAiHookVariant(ffmpeg, source, clip, outputName, width, height, progressStart, number, total) {
   const captionName = "caption_current.png";
+  if (!fileExists(ffmpeg, source.name)) ffmpeg.FS("writeFile", source.name, source.data);
   ffmpeg.FS("writeFile", captionName, await createCaptionOverlay(clip.line.text, clip.style, width, height));
   updateProgress(progressStart, `Rendering captioned hook ${number} / ${total}`, `${number} / ${total}`);
   try {
-    await captionClip(ffmpeg, sourceName, captionName, outputName);
+    await captionClip(ffmpeg, source.name, captionName, outputName);
   } catch (cause) {
     throw processingError(`The caption could not be rendered. ${ffmpegFailureDetail(cause)}`, cause);
   } finally {
