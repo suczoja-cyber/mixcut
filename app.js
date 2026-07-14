@@ -551,6 +551,8 @@ async function generateVideos() {
       const clip = allClips[index];
       if (clip.preparedFsName) { normalizedMap[clip.id] = clip.preparedFsName; continue; }
       const outputName = `ready_${index + 1}.mp4`;
+      let normalizationInput = fileMap[clip.id];
+      let browserPreparedName = null;
       const clipStart = normalizationBase + (index / allClips.length) * normalizationSpan;
       const clipShare = normalizationSpan / allClips.length;
       const clipLabel = `Clip ${index + 1} / ${allClips.length}`;
@@ -560,13 +562,37 @@ async function generateVideos() {
         updateProgress(Math.round(clipStart + safeRatio * clipShare), `Preparing ${clip.file.name}`, clipLabel);
       });
       safeUnlink(ffmpeg, outputName);
-      await normalizeClip(ffmpeg, fileMap[clip.id], outputName, width, height);
+      if (state.hookMode === "ai") {
+        try {
+          updateProgress(Math.round(clipStart), `Converting ${clip.file.name} with the fast browser decoder`, clipLabel);
+          browserPreparedName = `browser_source_${index + 1}.webm`;
+          safeUnlink(ffmpeg, browserPreparedName);
+          ffmpeg.FS("writeFile", browserPreparedName, await transcodeHookInBrowser(clip.file, width, height));
+          normalizationInput = browserPreparedName;
+        } catch (error) {
+          browserPreparedName = null;
+          normalizationInput = fileMap[clip.id];
+        }
+      }
+      await normalizeClip(ffmpeg, normalizationInput, outputName, width, height);
+      if (browserPreparedName) safeUnlink(ffmpeg, browserPreparedName);
       normalizedMap[clip.id] = outputName;
     }
 
     const zip = new JSZip();
     const outputFolder = zip.folder("mixcut-variations");
     const combinations = cartesian(parts.map((part) => workingFiles[part]));
+    let sharedTailName = null;
+    let sharedTailListName = null;
+    if (state.hookMode === "ai" && parts.length === 3 && workingFiles.bodies.length === 1 && workingFiles.ctas.length === 1) {
+      sharedTailName = "shared_body_cta.mp4";
+      sharedTailListName = "shared_body_cta.txt";
+      const sharedNames = [normalizedMap[workingFiles.bodies[0].id], normalizedMap[workingFiles.ctas[0].id]];
+      ffmpeg.FS("writeFile", sharedTailListName, new TextEncoder().encode(sharedNames.map((name) => `file '${name}'`).join("\n") + "\n"));
+      safeUnlink(ffmpeg, sharedTailName);
+      updateProgress(29, "Preparing the shared Body + CTA once", `0 / ${total}`);
+      await concatenateClips(ffmpeg, sharedNames, sharedTailListName, sharedTailName);
+    }
     let currentAiHookId = null;
     for (let index = 0; index < combinations.length; index++) {
       const combination = combinations[index];
@@ -580,7 +606,7 @@ async function generateVideos() {
       }
       updateProgress(percent, `Stitching ${outputName}`, `${index + 1} / ${total}`);
       const listName = `list_${index}.txt`;
-      const inputNames = combination.map((clip) => normalizedMap[clip.id]);
+      const inputNames = sharedTailName ? [normalizedMap[combination[0].id], sharedTailName] : combination.map((clip) => normalizedMap[clip.id]);
       const listText = inputNames.map((name) => `file '${name}'`).join("\n") + "\n";
       ffmpeg.FS("writeFile", listName, new TextEncoder().encode(listText));
       safeUnlink(ffmpeg, outputName);
@@ -611,6 +637,8 @@ async function generateVideos() {
   } finally {
     if (ffmpeg) {
       safeUnlink(ffmpeg, aiTemporaryHookName);
+      safeUnlink(ffmpeg, "shared_body_cta.mp4");
+      safeUnlink(ffmpeg, "shared_body_cta.txt");
       if (aiSource) safeUnlink(ffmpeg, aiSource.name);
     }
     stopProcessingTimer();
@@ -740,8 +768,13 @@ async function renderAiHookVariant(ffmpeg, source, clip, outputName, width, heig
 function processingError(message, cause) { const error = new Error(message); error.userMessage = message; error.cause = cause; return error; }
 
 async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
-  // Rebuild timestamps while joining. Stream-copying MediaRecorder clips can
-  // preserve large timestamp gaps and make a 15-second creative appear 35s long.
+  safeUnlink(ffmpeg, outputName);
+  try {
+    await runFfmpeg(ffmpeg, "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", outputName);
+    if (fileExists(ffmpeg, outputName)) return;
+  } catch (error) {}
+
+  safeUnlink(ffmpeg, outputName);
   const baseName = listName.replace(/\.txt$/, "");
   let currentName = inputNames[0];
   let previousTemporary = null;
