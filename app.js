@@ -24,7 +24,10 @@ const state = {
 };
 const limits = { maxCombinations: 100 };
 const dimensions = { vertical: [720, 1280], square: [1080, 1080], landscape: [1280, 720] };
+const lowMemoryDimensions = { vertical: [360, 640], square: [540, 540], landscape: [640, 360] };
 let ffmpegInstance = null;
+let ffmpegLogLines = [];
+let activeFfmpegCommandLogs = [];
 let processingStartedAt = 0;
 let processingTimer = null;
 let currentCountLabel = "";
@@ -507,6 +510,8 @@ async function generateVideos() {
   if (!window.FFmpeg || !window.JSZip) return showToast("The video tools couldn't load. Refresh and try again.", true);
 
   setBusy(true);
+  ffmpegLogLines = [];
+  activeFfmpegCommandLogs = [];
   startProcessingTimer();
   $("processPanel").hidden = false;
   $("successState").hidden = true;
@@ -520,7 +525,8 @@ async function generateVideos() {
   try {
     const { fetchFile } = FFmpeg;
     ffmpeg = await getVideoEngine();
-    const [width, height] = dimensions[$("aspectRatio").value];
+    const outputDimensions = state.hookMode === "ai" ? lowMemoryDimensions : dimensions;
+    const [width, height] = outputDimensions[$("aspectRatio").value];
     const workingFiles = { hooks: state.files.hooks, bodies: state.files.bodies, ctas: state.files.ctas };
     if (state.hookMode === "ai") {
       workingFiles.hooks = buildAiHookDescriptors();
@@ -599,7 +605,7 @@ async function generateVideos() {
     showToast("Your video variations are ready.");
   } catch (error) {
     console.error(error);
-    const message = error.userMessage || "A clip could not be processed. Use an H.264 MP4 source and try again.";
+    const message = error.userMessage || `A clip could not be processed. ${ffmpegFailureDetail(error)}`;
     $("processTitle").textContent = "We couldn't finish this batch";
     updateProgress(0, message, "Not completed");
     showToast(message, true);
@@ -648,7 +654,7 @@ async function renderAiHookVariant(ffmpeg, sourceName, clip, outputName, width, 
   try {
     await captionClip(ffmpeg, sourceName, captionName, outputName);
   } catch (cause) {
-    throw processingError("The clip was prepared, but its caption could not be rendered. Try a shorter hook line or reload the page.", cause);
+    throw processingError(`The caption could not be rendered. ${ffmpegFailureDetail(cause)}`, cause);
   } finally {
     safeUnlink(ffmpeg, captionName);
   }
@@ -659,7 +665,7 @@ function processingError(message, cause) { const error = new Error(message); err
 async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
   let copied = false;
   try {
-    await ffmpeg.run("-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", "-movflags", "+faststart", outputName);
+    await runFfmpeg(ffmpeg, "-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", "-movflags", "+faststart", outputName);
     copied = fileExists(ffmpeg, outputName);
   } catch (error) {}
   if (copied) return;
@@ -681,7 +687,7 @@ async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
 
 async function joinClipPair(ffmpeg, firstName, secondName, outputName, baseName) {
   const filter = "[0:v:0]setpts=PTS-STARTPTS[v0];[0:a:0]asetpts=PTS-STARTPTS[a0];[1:v:0]setpts=PTS-STARTPTS[v1];[1:a:0]asetpts=PTS-STARTPTS[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]";
-  await ffmpeg.run("-i", firstName, "-i", secondName, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", outputName);
+  await runFfmpeg(ffmpeg, "-i", firstName, "-i", secondName, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", outputName);
   if (!fileExists(ffmpeg, outputName)) throw new Error("A pair of prepared clips could not be joined.");
 }
 
@@ -690,8 +696,32 @@ function fileExists(ffmpeg, name) { try { return ffmpeg.FS("stat", name).size > 
 async function getVideoEngine() {
   if (ffmpegInstance?.isLoaded()) return ffmpegInstance;
   ffmpegInstance = FFmpeg.createFFmpeg({ log: false, corePath: new URL("vendor/ffmpeg-core.js", window.location.href).href });
+  ffmpegInstance.setLogger(({ type, message }) => {
+    const line = `${type}: ${message}`;
+    ffmpegLogLines.push(line);
+    activeFfmpegCommandLogs.push(line);
+    if (ffmpegLogLines.length > 160) ffmpegLogLines.shift();
+  });
   await ffmpegInstance.load();
   return ffmpegInstance;
+}
+
+async function runFfmpeg(ffmpeg, ...args) {
+  activeFfmpegCommandLogs = [];
+  try {
+    await ffmpeg.run(...args);
+  } catch (error) {
+    throw new Error(ffmpegFailureDetail(error));
+  }
+  const failedLine = [...activeFfmpegCommandLogs].reverse().find((line) => /conversion failed|error (?:initializing|reinitializing|while processing)|invalid data|no such file|option not found|cannot allocate memory|out of memory|aborted|failed to inject/i.test(line));
+  if (failedLine) throw new Error(cleanFfmpegLine(failedLine));
+}
+
+function cleanFfmpegLine(line) { return String(line || "").replace(/^(?:fferr|ffout|info):\s*/i, "").trim(); }
+function ffmpegFailureDetail(error) {
+  const direct = error?.message && !/^ffmpeg\.run error/i.test(error.message) ? error.message : "";
+  const logged = [...ffmpegLogLines].reverse().find((line) => /conversion failed|error (?:initializing|reinitializing|while processing)|invalid data|no such file|option not found|cannot allocate memory|out of memory|aborted|failed to inject/i.test(line));
+  return cleanFfmpegLine(direct || logged || "Reload the page and try one variation first.");
 }
 
 function baseVideoFilter(width, height) { return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,format=yuv420p`; }
@@ -711,17 +741,17 @@ async function createCaptionOverlay(text, style, width, height) {
 
 async function captionClip(ffmpeg, inputName, captionName, outputName) {
   const filter = "[0:v:0][1:v:0]overlay=0:0:format=auto:eof_action=repeat:repeatlast=1[v]";
-  await ffmpeg.run("-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", outputName);
+  await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", outputName);
   if (!fileExists(ffmpeg, outputName)) throw new Error("Caption overlay did not create a valid video.");
 }
 
 async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter) {
   const common = ["-vf", filter, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
   try {
-    await ffmpeg.run("-i", inputName, "-map", "0:v:0", "-map", "0:a:0", ...common, outputName);
+    await runFfmpeg(ffmpeg, "-i", inputName, "-map", "0:v:0", "-map", "0:a:0", ...common, outputName);
   } catch (error) {
     safeUnlink(ffmpeg, outputName);
-    await ffmpeg.run("-i", inputName, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0", ...common, "-shortest", outputName);
+    await runFfmpeg(ffmpeg, "-i", inputName, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0", ...common, "-shortest", outputName);
   }
 }
 
