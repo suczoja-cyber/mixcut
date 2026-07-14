@@ -66,7 +66,7 @@ function makeCaptionStyle(color, placement, mode) {
     strokeWidth: 5,
     boxColor: null,
     position: placement.position,
-    animation: "Fade in"
+    animation: "Static"
   });
 }
 function styleWithExtra(style) {
@@ -514,17 +514,23 @@ async function generateVideos() {
   $("processPanel").scrollIntoView({ behavior: "smooth", block: "center" });
   updateProgress(0, "Loading the video engine", `0 / ${total}`);
 
+  let ffmpeg = null;
+  let aiSourceName = null;
+  const aiTemporaryHookName = "ai_hook_current.mp4";
   try {
     const { fetchFile } = FFmpeg;
-    const ffmpeg = await getVideoEngine();
+    ffmpeg = await getVideoEngine();
     const [width, height] = dimensions[$("aspectRatio").value];
     const workingFiles = { hooks: state.files.hooks, bodies: state.files.bodies, ctas: state.files.ctas };
-    if (state.hookMode === "ai") workingFiles.hooks = await renderAiHookClips(ffmpeg, width, height, fetchFile);
+    if (state.hookMode === "ai") {
+      workingFiles.hooks = buildAiHookDescriptors();
+      aiSourceName = await prepareAiHookSource(ffmpeg, width, height, fetchFile);
+    }
 
-    const allClips = parts.flatMap((part) => workingFiles[part].map((clip) => ({ ...clip, part })));
+    const allClips = parts.flatMap((part) => workingFiles[part].filter((clip) => !clip.aiVariant).map((clip) => ({ ...clip, part })));
     const fileMap = {};
-    const normalizationBase = state.hookMode === "ai" ? 30 : 4;
-    const normalizationSpan = state.hookMode === "ai" ? 15 : 31;
+    const normalizationBase = state.hookMode === "ai" ? 8 : 4;
+    const normalizationSpan = state.hookMode === "ai" ? 22 : 31;
     updateProgress(normalizationBase, "Reading your source clips", `0 / ${total}`);
 
     for (let index = 0; index < allClips.length; index++) {
@@ -556,10 +562,17 @@ async function generateVideos() {
     const zip = new JSZip();
     const outputFolder = zip.folder("mixcut-variations");
     const combinations = cartesian(parts.map((part) => workingFiles[part]));
+    let currentAiHookId = null;
     for (let index = 0; index < combinations.length; index++) {
       const combination = combinations[index];
       const outputName = combination.map((clip, partIndex) => `${partDefinitions[parts[partIndex]].singular}-${workingFiles[parts[partIndex]].indexOf(clip) + 1}`).join("_") + ".mp4";
-      const percent = 45 + Math.round((index / combinations.length) * 47);
+      const percent = 30 + Math.round((index / combinations.length) * 62);
+      if (state.hookMode === "ai" && combination[0].id !== currentAiHookId) {
+        safeUnlink(ffmpeg, aiTemporaryHookName);
+        await renderAiHookVariant(ffmpeg, aiSourceName, combination[0], aiTemporaryHookName, width, height, percent, index + 1, total);
+        normalizedMap[combination[0].id] = aiTemporaryHookName;
+        currentAiHookId = combination[0].id;
+      }
       updateProgress(percent, `Stitching ${outputName}`, `${index + 1} / ${total}`);
       const listName = `list_${index}.txt`;
       const inputNames = combination.map((clip) => normalizedMap[clip.id]);
@@ -591,60 +604,53 @@ async function generateVideos() {
     updateProgress(0, message, "Not completed");
     showToast(message, true);
   } finally {
+    if (ffmpeg) {
+      safeUnlink(ffmpeg, aiTemporaryHookName);
+      if (aiSourceName) safeUnlink(ffmpeg, aiSourceName);
+    }
     stopProcessingTimer();
     setBusy(false);
   }
 }
 
-async function renderAiHookClips(ffmpeg, width, height, fetchFile) {
-  const variants = selectedPreviewVariants();
+function buildAiHookDescriptors() {
+  const styles = availableCaptionStyles();
+  return selectedPreviewVariants().map((variant, index) => {
+    const line = state.ai.paraphrases.find((item) => item.id === variant.lineId);
+    const style = styles.find((item) => item.id === variant.styleId);
+    return { id: `ai-${variant.id}`, file: { name: `generated-hook-${index + 1}.mp4`, size: 0 }, aiVariant: true, line, style };
+  }).filter((clip) => clip.line && clip.style);
+}
+
+async function prepareAiHookSource(ffmpeg, width, height, fetchFile) {
   const raw = state.ai.rawClip;
   const inputName = `ai_raw.${getExtension(raw.file.name)}`;
   const normalizedInputName = "ai_raw_ready.mp4";
   ffmpeg.FS("writeFile", inputName, await fetchFile(raw.file));
-  const results = [];
   try {
-    updateProgress(3, "Checking and preparing the raw hook", `0 / ${variants.length} hooks`);
+    updateProgress(3, "Checking and preparing the raw hook", `0 / ${selectedPreviewVariants().length} hooks`);
     safeUnlink(ffmpeg, normalizedInputName);
     try {
       await normalizeClip(ffmpeg, inputName, normalizedInputName, width, height);
     } catch (cause) {
       throw processingError("The raw hook could not be decoded. On Mac, export it as an H.264 MP4 (Most Compatible), then try again.", cause);
     }
-
-    let completed = 0;
-    const variantTotal = variants.length;
-    const styles = availableCaptionStyles();
-    for (const variant of variants) {
-      const line = state.ai.paraphrases.find((item) => item.id === variant.lineId);
-      const style = styles.find((item) => item.id === variant.styleId);
-      if (!line || !style) continue;
-      const lineIndex = state.ai.paraphrases.indexOf(line);
-      const captionName = `caption_${lineIndex}_${style.id}.txt`;
-      const outputName = `ai_hook_${lineIndex + 1}_${style.id}.mp4`;
-      ffmpeg.FS("writeFile", captionName, new TextEncoder().encode(wrapCaption(line.text)));
-      const start = 8 + (completed / variantTotal) * 22;
-      const share = 22 / variantTotal;
-      updateProgress(Math.round(start), `Rendering captioned hook ${completed + 1} / ${variantTotal}`, `${completed + 1} / ${variantTotal} hooks`);
-      ffmpeg.setProgress(({ ratio }) => {
-        const safeRatio = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
-        updateProgress(Math.round(start + safeRatio * share), `Rendering captioned hook ${completed + 1} / ${variantTotal}`, `${completed + 1} / ${variantTotal} hooks`);
-      });
-      safeUnlink(ffmpeg, outputName);
-      try {
-        await captionClip(ffmpeg, normalizedInputName, captionName, outputName, style, width, height, true);
-      } catch (cause) {
-        throw processingError("The clip was prepared, but its caption could not be rendered. Try a shorter hook line or reload the page.", cause);
-      } finally {
-        safeUnlink(ffmpeg, captionName);
-      }
-      results.push({ id: crypto.randomUUID(), file: { name: outputName, size: 0 }, preparedFsName: outputName, aiLine: line.text, style: style.id });
-      completed++;
-    }
-    return results;
+    return normalizedInputName;
   } finally {
     safeUnlink(ffmpeg, inputName);
-    safeUnlink(ffmpeg, normalizedInputName);
+  }
+}
+
+async function renderAiHookVariant(ffmpeg, sourceName, clip, outputName, width, height, progressStart, number, total) {
+  const captionName = "caption_current.png";
+  ffmpeg.FS("writeFile", captionName, await createCaptionOverlay(clip.line.text, clip.style, width, height));
+  updateProgress(progressStart, `Rendering captioned hook ${number} / ${total}`, `${number} / ${total}`);
+  try {
+    await captionClip(ffmpeg, sourceName, captionName, outputName);
+  } catch (cause) {
+    throw processingError("The clip was prepared, but its caption could not be rendered. Try a shorter hook line or reload the page.", cause);
+  } finally {
+    safeUnlink(ffmpeg, captionName);
   }
 }
 
@@ -659,17 +665,24 @@ async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
   if (copied) return;
 
   safeUnlink(ffmpeg, outputName);
-  const tsNames = inputNames.map((_, index) => `${listName.replace(/\.txt$/, "")}_${index}.ts`);
-  try {
-    for (let index = 0; index < inputNames.length; index++) {
-      safeUnlink(ffmpeg, tsNames[index]);
-      await ffmpeg.run("-i", inputNames[index], "-c", "copy", "-bsf:v", "h264_mp4toannexb", "-f", "mpegts", tsNames[index]);
-    }
-    await ffmpeg.run("-i", `concat:${tsNames.join("|")}`, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", outputName);
-  } finally {
-    tsNames.forEach((name) => safeUnlink(ffmpeg, name));
+  const baseName = listName.replace(/\.txt$/, "");
+  let currentName = inputNames[0];
+  let previousTemporary = null;
+  for (let index = 1; index < inputNames.length; index++) {
+    const targetName = index === inputNames.length - 1 ? outputName : `${baseName}_merged_${index}.mp4`;
+    safeUnlink(ffmpeg, targetName);
+    await joinClipPair(ffmpeg, currentName, inputNames[index], targetName, `${baseName}_pair_${index}`);
+    if (previousTemporary) safeUnlink(ffmpeg, previousTemporary);
+    previousTemporary = targetName === outputName ? null : targetName;
+    currentName = targetName;
   }
   if (!fileExists(ffmpeg, outputName)) throw new Error("FFmpeg completed without creating the joined output file.");
+}
+
+async function joinClipPair(ffmpeg, firstName, secondName, outputName, baseName) {
+  const filter = "[0:v:0]setpts=PTS-STARTPTS[v0];[0:a:0]asetpts=PTS-STARTPTS[a0];[1:v:0]setpts=PTS-STARTPTS[v1];[1:a:0]asetpts=PTS-STARTPTS[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]";
+  await ffmpeg.run("-i", firstName, "-i", secondName, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", outputName);
+  if (!fileExists(ffmpeg, outputName)) throw new Error("A pair of prepared clips could not be joined.");
 }
 
 function fileExists(ffmpeg, name) { try { return ffmpeg.FS("stat", name).size > 0; } catch (error) { return false; } }
@@ -687,10 +700,19 @@ async function normalizeClip(ffmpeg, inputName, outputName, width, height) {
   await transcodeWithAudioFallback(ffmpeg, inputName, outputName, baseVideoFilter(width, height));
 }
 
-async function captionClip(ffmpeg, inputName, captionName, outputName, style, width, height, alreadyNormalized = false) {
-  const fontSize = Math.round(Math.min(width, height) * 0.055);
-  const drawtext = `drawtext=font='${style.font}':textfile='${captionName}':fontcolor=${style.color}:fontsize=${fontSize}:line_spacing=${Math.round(fontSize * .24)}:${style.extra}`;
-  await transcodeWithAudioFallback(ffmpeg, inputName, outputName, alreadyNormalized ? drawtext : `${baseVideoFilter(width, height)},${drawtext}`);
+async function createCaptionOverlay(text, style, width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  drawCaptionPreview(canvas.getContext("2d"), text, style, width, height);
+  const blob = await new Promise((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Caption image could not be created.")), "image/png"));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function captionClip(ffmpeg, inputName, captionName, outputName) {
+  const filter = "[0:v:0][1:v:0]overlay=0:0:format=auto[v]";
+  await ffmpeg.run("-i", inputName, "-loop", "1", "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", "-shortest", outputName);
+  if (!fileExists(ffmpeg, outputName)) throw new Error("Caption overlay did not create a valid video.");
 }
 
 async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter) {
@@ -701,19 +723,6 @@ async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter)
     safeUnlink(ffmpeg, outputName);
     await ffmpeg.run("-i", inputName, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0", ...common, "-shortest", outputName);
   }
-}
-
-function wrapCaption(text, maxChars = 27) {
-  const words = text.trim().split(/\s+/);
-  const lines = [];
-  let line = "";
-  words.forEach((word) => {
-    if (line && `${line} ${word}`.length > maxChars && lines.length < 3) { lines.push(line); line = word; }
-    else line = line ? `${line} ${word}` : word;
-  });
-  if (line) lines.push(line);
-  if (lines.length > 4) return [...lines.slice(0, 3), lines.slice(3).join(" ")].join("\n");
-  return lines.join("\n");
 }
 
 function cartesian(groups) { return groups.reduce((results, group) => results.flatMap((result) => group.map((item) => [...result, item])), [[]]); }
