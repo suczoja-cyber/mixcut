@@ -9,11 +9,12 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="promo-bar"><span class="promo-icon">✦</span> BUILT FOR CREATIVE TESTING <span>TURN CLIPS INTO CAMPAIGNS</span> <b>→</b></div>
+  <div class="promo-bar"><span class="promo-icon">8X</span> ARE YOU A CREATOR? <span>DOWNLOAD THE 8X APP</span> <b>→</b></div>
 
   <header class="site-header">
-    <a class="brand" href="#" aria-label="Mixcut home"><span class="brand-dot"></span>mixcut</a>
-    <div class="header-right"><span><i></i> Videos stay on your device</span><a href="#workspace">Start mixing <b>↗</b></a></div>
+    <a class="eightx-brand" href="https://www.8x.social/en" aria-label="8x home"><strong>8x</strong><span>mixcut</span></a>
+    <nav class="brand-nav" aria-label="8x navigation"><a href="https://www.8x.social/en">Creators</a><a href="https://www.8x.social/en">Advertisers</a><a href="https://www.8x.social/en">About 8x</a></nav>
+    <div class="header-right"><span><i></i> Processed privately</span><a href="#workspace">Open mixer <b>↗</b></a></div>
   </header>
 
   <div class="file-warning" id="fileWarning" hidden>
@@ -23,11 +24,12 @@
 
   <main>
     <section class="hero">
-      <div class="hero-kicker"><span>VIDEO VARIATION ENGINE</span><i></i></div>
-      <h1>Every version.<br><em>Zero busywork.</em></h1>
-      <p>Upload each part of your ad once. Mixcut combines every variation, names the files, and delivers one ready-to-test ZIP.</p>
-      <a class="hero-button" href="#workspace">Build my variations <span>↓</span></a>
+      <div class="hero-kicker"><span>A CREATIVE TOOL BY 8X</span><i></i></div>
+      <h1>More creative.<br><span>No editing grind.</span><br><em>Every variation.</em></h1>
+      <p>Mix every hook, body, and CTA into ready-to-test ads—without rebuilding the same video over and over.</p>
+      <a class="hero-button" href="#workspace">Start creating <span>↓</span></a>
       <span class="scribble scribble-one">✦</span><span class="scribble scribble-two">●</span><span class="scribble scribble-three">↗</span>
+      <div class="hero-phones" aria-hidden="true"><div class="mini-phone phone-hook"><span>HOOK</span><b>Stop<br>the scroll.</b></div><div class="mini-phone phone-body"><span>BODY</span><b>Tell<br>the story.</b></div><div class="mini-phone phone-cta"><span>CTA</span><b>Drive<br>action.</b></div></div>
     </section>
 
     <section class="workspace" id="workspace" aria-label="Video variation builder">
@@ -37,6 +39,12 @@
           <button type="button" data-parts="2"><b>2</b><span>Hook + Body</span></button>
           <button type="button" data-parts="3" class="active"><b>3</b><span>Hook + Body + CTA</span></button>
         </div>
+      </div>
+
+      <div class="workflow-progress" aria-label="Workflow progress">
+        <div class="workflow-step complete" id="workflowStep1"><span>1</span><p><b>Structure</b><small>Choose 2 or 3 parts</small></p></div><i></i>
+        <div class="workflow-step active" id="workflowStep2"><span>2</span><p><b>Upload</b><small>Add your clip variations</small></p></div><i></i>
+        <div class="workflow-step" id="workflowStep3"><span>3</span><p><b>Generate</b><small>Process and download</small></p></div>
       </div>
 
       <div class="formula-strip" id="formulaStrip" aria-label="Combination formula"></div>
@@ -63,7 +71,7 @@
     </section>
   </main>
 
-  <footer><a class="brand" href="#"><span class="brand-dot"></span>mixcut</a><p>MORE VARIATIONS. BETTER CREATIVE.</p><span>Processed locally in your browser.</span></footer>
+  <footer><a class="eightx-brand footer-brand" href="https://www.8x.social/en"><strong>8x</strong><span>mixcut</span></a><p>CREATOR-POWERED PERFORMANCE.</p><span>An 8x creative tool · Processed locally.</span></footer>
   <div class="toast" id="toast" role="status"></div>
 
   <script src="vendor/ffmpeg.min.js"></script>
