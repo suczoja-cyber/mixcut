@@ -746,9 +746,7 @@ async function generateVideos() {
     for (let index = 0; index < allClips.length; index++) {
       const clip = allClips[index];
       if (clip.preparedFsName) { fileMap[clip.id] = clip.preparedFsName; continue; }
-      const fsName = `source_${index + 1}.${getExtension(clip.file.name)}`;
-      fileMap[clip.id] = fsName;
-      ffmpeg.FS("writeFile", fsName, await fetchFile(clip.file));
+      fileMap[clip.id] = `source_${index + 1}.${getExtension(clip.file.name)}`;
     }
 
     const normalizedMap = {};
@@ -767,19 +765,22 @@ async function generateVideos() {
         updateProgress(Math.round(clipStart + safeRatio * clipShare), `Preparing ${clip.file.name}`, clipLabel);
       });
       safeUnlink(ffmpeg, outputName);
-      if (state.hookMode === "ai") {
+      safeUnlink(ffmpeg, normalizationInput);
+      ffmpeg.FS("writeFile", normalizationInput, await fetchFile(clip.file));
+      try {
+        await normalizeClip(ffmpeg, normalizationInput, outputName, width, height);
+      } catch (nativeCause) {
+        safeUnlink(ffmpeg, outputName);
+        updateProgress(Math.round(clipStart), `Making ${clip.file.name} compatible with the Mac video decoder`, clipLabel);
+        browserPreparedName = `browser_source_${index + 1}.webm`;
+        safeUnlink(ffmpeg, browserPreparedName);
         try {
-          updateProgress(Math.round(clipStart), `Converting ${clip.file.name} with the fast browser decoder`, clipLabel);
-          browserPreparedName = `browser_source_${index + 1}.webm`;
-          safeUnlink(ffmpeg, browserPreparedName);
           ffmpeg.FS("writeFile", browserPreparedName, await transcodeHookInBrowser(clip.file, width, height));
-          normalizationInput = browserPreparedName;
-        } catch (error) {
-          browserPreparedName = null;
-          normalizationInput = fileMap[clip.id];
+          await normalizeClip(ffmpeg, browserPreparedName, outputName, width, height);
+        } catch (browserCause) {
+          throw processingError(`“${clip.file.name}” could not be decoded. Browser check: ${browserCause.message} Videos saved from Messages may use HEVC; on Mac, open it in QuickTime and export/save an H.264 MP4, then upload that copy.`, nativeCause);
         }
       }
-      await normalizeClip(ffmpeg, normalizationInput, outputName, width, height);
       if (browserPreparedName) safeUnlink(ffmpeg, browserPreparedName);
       safeUnlink(ffmpeg, fileMap[clip.id]);
       normalizedMap[clip.id] = outputName;
