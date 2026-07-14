@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f5f1ea" />
+  <meta name="description" content="Create every unique hook, demo, and CTA video combination in one click." />
+  <title>Mixcut — Video variation maker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#" aria-label="Mixcut home">
+      <span class="brand-mark"><i></i><i></i><i></i></span>
+      <span>mixcut</span>
+    </a>
+    <div class="header-note"><span class="lock-icon">✓</span> Your videos stay on your device</div>
+  </header>
+
+  <div class="file-warning" id="fileWarning" hidden>
+    <b>Mixcut needs its local launcher to process videos.</b>
+    <span>Double-click “Start Mixcut.command” in this folder, then use the page it opens.</span>
+  </div>
+
+  <main>
+    <section class="intro">
+      <p class="eyebrow"><span></span> VIDEO VARIATION MAKER</p>
+      <h1>One upload.<br><em>Every combination.</em></h1>
+      <p class="intro-copy">Add your hooks, demos, and CTAs. Mixcut stitches every possible variation together and packs them into one tidy ZIP.</p>
+      <div class="formula" aria-label="How Mixcut works">
+        <span><b id="formulaHooks">0</b> hooks</span><i>×</i>
+        <span><b id="formulaDemos">0</b> demos</span><i>×</i>
+        <span><b id="formulaCtas">0</b> CTAs</span><i>=</i>
+        <span class="formula-result"><b id="formulaTotal">0</b> videos</span>
+      </div>
+    </section>
+
+    <section class="workspace" aria-label="Video uploads">
+      <div class="workspace-top">
+        <div>
+          <span class="step-label">STEP 1 OF 2</span>
+          <h2>Add your video parts</h2>
+          <p>Upload at least one clip to each section. You can add as many variations as you need.</p>
+        </div>
+        <button class="reset-button" id="resetButton" type="button" disabled>Clear all</button>
+      </div>
+
+      <div class="format-note">
+        <span>i</span>
+        <p><b>MP4, MOV, M4V, WebM, MPEG, AVI, and HEVC are accepted — with no fixed file-size limit.</b><small>Using Apple Photos? Drag videos from Photos onto a box below, or choose File → Export → Export Unmodified Original in Photos first.</small></p>
+      </div>
+
+      <div class="upload-grid">
+        <section class="upload-card" data-category="hooks">
+          <div class="card-heading">
+            <span class="number-badge coral">01</span>
+            <div><h3>Hooks</h3><p>Grab their attention</p></div>
+            <span class="file-count" id="hooksCount">0 clips</span>
+          </div>
+          <label class="drop-zone" id="hooksDrop">
+            <input type="file" id="hooksInput" multiple />
+            <span class="upload-icon">↑</span>
+            <b>Drop hook videos here</b>
+            <small>or <u>browse your files</u></small>
+          </label>
+          <div class="clip-list" id="hooksList"></div>
+        </section>
+
+        <section class="upload-card" data-category="demos">
+          <div class="card-heading">
+            <span class="number-badge violet">02</span>
+            <div><h3>Demos</h3><p>Show how it works</p></div>
+            <span class="file-count" id="demosCount">0 clips</span>
+          </div>
+          <label class="drop-zone" id="demosDrop">
+            <input type="file" id="demosInput" multiple />
+            <span class="upload-icon">↑</span>
+            <b>Drop demo videos here</b>
+            <small>or <u>browse your files</u></small>
+          </label>
+          <div class="clip-list" id="demosList"></div>
+        </section>
+
+        <section class="upload-card" data-category="ctas">
+          <div class="card-heading">
+            <span class="number-badge lime">03</span>
+            <div><h3>CTAs</h3><p>Close with action</p></div>
+            <span class="file-count" id="ctasCount">0 clips</span>
+          </div>
+          <label class="drop-zone" id="ctasDrop">
+            <input type="file" id="ctasInput" multiple />
+            <span class="upload-icon">↑</span>
+            <b>Drop CTA videos here</b>
+            <small>or <u>browse your files</u></small>
+          </label>
+          <div class="clip-list" id="ctasList"></div>
+        </section>
+      </div>
+
+      <div class="generate-bar">
+        <div class="output-setting">
+          <label for="aspectRatio">Output format</label>
+          <select id="aspectRatio">
+            <option value="vertical">Vertical · 9:16</option>
+            <option value="square">Square · 1:1</option>
+            <option value="landscape">Landscape · 16:9</option>
+          </select>
+        </div>
+        <div class="ready-copy">
+          <span id="readyDot"></span>
+          <p><b id="readyTitle">Add clips to all 3 sections</b><small id="readyText">Your combination count will appear here.</small></p>
+        </div>
+        <button class="generate-button" id="generateButton" type="button" disabled>
+          <span>I'm done — make my videos</span><b>→</b>
+        </button>
+      </div>
+    </section>
+
+    <section class="process-panel" id="processPanel" aria-live="polite" hidden>
+      <div class="process-head">
+        <div><span class="step-label">STEP 2 OF 2</span><h2 id="processTitle">Preparing your videos…</h2></div>
+        <strong id="progressPercent">0%</strong>
+      </div>
+      <div class="progress-track"><span id="progressBar"></span></div>
+      <div class="process-meta"><span id="processStatus">Loading the video engine</span><span id="processCount">0 / 0</span></div>
+      <div class="success-state" id="successState" hidden>
+        <span class="success-check">✓</span>
+        <div><h3>Your variations are ready</h3><p id="successCopy"></p></div>
+        <button id="downloadButton" type="button">Download ZIP <span>↓</span></button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p><b>mixcut</b> · Built for faster creative testing.</p>
+    <p>MP4, MOV, WebM · Videos are processed locally</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="vendor/ffmpeg.min.js"></script>
+  <script src="vendor/jszip.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
