@@ -21,7 +21,7 @@ const captionFonts = [
   { id: "modern", label: "Modern", family: "Avenir Next, Helvetica Neue, Arial, sans-serif", weight: 700 },
   { id: "bold", label: "Bold", family: "Arial Black, Arial, sans-serif", weight: 900 },
   { id: "serif", label: "Serif", family: "Georgia, Times New Roman, serif", weight: 700 },
-  { id: "snapchat", label: "Snapchat", family: "Avenir Next, Helvetica Neue, Arial, sans-serif", weight: 700, boxColor: "rgba(0,0,0,.58)", strokeWidth: 0 }
+  { id: "snapchat", label: "Snapchat", family: "Helvetica Neue, Helvetica, Arial, sans-serif", weight: 400, boxColor: "rgba(0,0,0,.72)", strokeWidth: 0, fullWidthBox: true, baseFontScale: .7, lineHeight: 1.12 }
 ];
 const captionPositions = [
   { id: "lower", label: "Lower third", detail: "lower 70%", position: { x: 50, y: 70 } },
@@ -111,7 +111,7 @@ function sectionStyles(part) { return sectionDesignMode(part) === "same" ? selec
 function sectionCaptionLines(part) { return (part === "bodies" ? state.ai.bodyCaption : state.ai.ctaCaption).split(/\r?\n/).map((line) => line.trim()).filter(Boolean); }
 function adjustedCaptionStyle(style, part) {
   const adjustment = state.ai.positionAdjustments[part][style.positionId] || { size: 100, x: 0, y: 0 };
-  return { ...style, fontScale: adjustment.size / 100, position: { x: Math.max(0, Math.min(100, style.position.x + adjustment.x)), y: Math.max(0, Math.min(100, style.position.y + adjustment.y)) } };
+  return { ...style, fontScale: (style.baseFontScale || 1) * adjustment.size / 100, position: { x: Math.max(0, Math.min(100, style.position.x + adjustment.x)), y: Math.max(0, Math.min(100, style.position.y + adjustment.y)) } };
 }
 function positionAdjustmentMarkup(part) {
   const positions = captionPositions.filter((position) => designIds(part, "Position").includes(position.id));
@@ -580,7 +580,7 @@ function drawCaptionPreview(context, text, style, width, height) {
   context.lineJoin = "round";
   const maxTextWidth = width * .82;
   const lines = wrapCanvasText(context, text, maxTextWidth, 4);
-  const lineHeight = fontSize * 1.14;
+  const lineHeight = fontSize * (style.lineHeight || 1.14);
   const blockWidth = Math.min(maxTextWidth, Math.max(...lines.map((line) => context.measureText(line).width)));
   const blockHeight = lines.length * lineHeight;
   const centerX = width * (style.position.x / 100);
@@ -589,8 +589,11 @@ function drawCaptionPreview(context, text, style, width, height) {
     const paddingX = fontSize * .55;
     const paddingY = fontSize * .38;
     context.fillStyle = style.boxColor;
-    roundedRect(context, centerX - blockWidth / 2 - paddingX, centerY - blockHeight / 2 - paddingY, blockWidth + paddingX * 2, blockHeight + paddingY * 2, fontSize * .25);
-    context.fill();
+    if (style.fullWidthBox) context.fillRect(0, centerY - blockHeight / 2 - paddingY, width, blockHeight + paddingY * 2);
+    else {
+      roundedRect(context, centerX - blockWidth / 2 - paddingX, centerY - blockHeight / 2 - paddingY, blockWidth + paddingX * 2, blockHeight + paddingY * 2, fontSize * .25);
+      context.fill();
+    }
   }
   lines.forEach((line, index) => {
     const y = centerY - ((lines.length - 1) * lineHeight) / 2 + index * lineHeight;
