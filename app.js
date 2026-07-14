@@ -701,6 +701,7 @@ async function getVideoEngine() {
     ffmpegLogLines.push(line);
     activeFfmpegCommandLogs.push(line);
     if (ffmpegLogLines.length > 160) ffmpegLogLines.shift();
+    window.__mixcutFfmpegLogs = ffmpegLogLines.slice();
   });
   await ffmpegInstance.load();
   return ffmpegInstance;
@@ -713,15 +714,19 @@ async function runFfmpeg(ffmpeg, ...args) {
   } catch (error) {
     throw new Error(ffmpegFailureDetail(error));
   }
-  const failedLine = [...activeFfmpegCommandLogs].reverse().find((line) => /conversion failed|error (?:initializing|reinitializing|while processing)|invalid data|no such file|option not found|cannot allocate memory|out of memory|aborted|failed to inject/i.test(line));
+  const failedLine = findFfmpegFailure(activeFfmpegCommandLogs);
   if (failedLine) throw new Error(cleanFfmpegLine(failedLine));
 }
 
 function cleanFfmpegLine(line) { return String(line || "").replace(/^(?:fferr|ffout|info):\s*/i, "").trim(); }
+function findFfmpegFailure(lines) {
+  const specific = [...lines].reverse().find((line) => !/conversion failed!?\s*$/i.test(line) && /error (?:initializing|reinitializing|while processing)|invalid data|no such file|option not found|cannot allocate memory|out of memory|aborted|failed to inject|failed to configure|resource temporarily unavailable|killed/i.test(line));
+  return specific || [...lines].reverse().find((line) => /conversion failed/i.test(line));
+}
 function ffmpegFailureDetail(error) {
-  const direct = error?.message && !/^ffmpeg\.run error/i.test(error.message) ? error.message : "";
-  const logged = [...ffmpegLogLines].reverse().find((line) => /conversion failed|error (?:initializing|reinitializing|while processing)|invalid data|no such file|option not found|cannot allocate memory|out of memory|aborted|failed to inject/i.test(line));
-  return cleanFfmpegLine(direct || logged || "Reload the page and try one variation first.");
+  const direct = error?.message && !/^(?:ffmpeg\.run error|conversion failed!?)/i.test(error.message) ? error.message : "";
+  const logged = findFfmpegFailure(ffmpegLogLines);
+  return cleanFfmpegLine(direct || logged || error?.message || "Reload the page and try one variation first.");
 }
 
 function baseVideoFilter(width, height) { return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,format=yuv420p`; }
