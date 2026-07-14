@@ -659,10 +659,16 @@ async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
   if (copied) return;
 
   safeUnlink(ffmpeg, outputName);
-  const inputArgs = inputNames.flatMap((name) => ["-i", name]);
-  const streams = inputNames.map((_, index) => `[${index}:v:0][${index}:a:0]`).join("");
-  const filter = `${streams}concat=n=${inputNames.length}:v=1:a=1[v][a]`;
-  await ffmpeg.run(...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", outputName);
+  const tsNames = inputNames.map((_, index) => `${listName.replace(/\.txt$/, "")}_${index}.ts`);
+  try {
+    for (let index = 0; index < inputNames.length; index++) {
+      safeUnlink(ffmpeg, tsNames[index]);
+      await ffmpeg.run("-i", inputNames[index], "-c", "copy", "-bsf:v", "h264_mp4toannexb", "-f", "mpegts", tsNames[index]);
+    }
+    await ffmpeg.run("-i", `concat:${tsNames.join("|")}`, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", outputName);
+  } finally {
+    tsNames.forEach((name) => safeUnlink(ffmpeg, name));
+  }
   if (!fileExists(ffmpeg, outputName)) throw new Error("FFmpeg completed without creating the joined output file.");
 }
 
