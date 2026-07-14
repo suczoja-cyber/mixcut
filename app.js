@@ -739,14 +739,8 @@ async function renderAiHookVariant(ffmpeg, source, clip, outputName, width, heig
 function processingError(message, cause) { const error = new Error(message); error.userMessage = message; error.cause = cause; return error; }
 
 async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
-  let copied = false;
-  try {
-    await runFfmpeg(ffmpeg, "-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", "-movflags", "+faststart", outputName);
-    copied = fileExists(ffmpeg, outputName);
-  } catch (error) {}
-  if (copied) return;
-
-  safeUnlink(ffmpeg, outputName);
+  // Rebuild timestamps while joining. Stream-copying MediaRecorder clips can
+  // preserve large timestamp gaps and make a 15-second creative appear 35s long.
   const baseName = listName.replace(/\.txt$/, "");
   let currentName = inputNames[0];
   let previousTemporary = null;
@@ -805,7 +799,7 @@ function ffmpegFailureDetail(error) {
   return cleanFfmpegLine(direct || logged || error?.message || "Reload the page and try one variation first.");
 }
 
-function baseVideoFilter(width, height) { return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,format=yuv420p`; }
+function baseVideoFilter(width, height) { return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,format=yuv420p,setpts=PTS-STARTPTS`; }
 
 async function normalizeClip(ffmpeg, inputName, outputName, width, height) {
   await transcodeWithAudioFallback(ffmpeg, inputName, outputName, baseVideoFilter(width, height));
@@ -821,8 +815,8 @@ async function createCaptionOverlay(text, style, width, height) {
 }
 
 async function captionClip(ffmpeg, inputName, captionName, outputName) {
-  const filter = "[0:v:0][1:v:0]overlay=0:0:format=auto:eof_action=repeat:repeatlast=1[v]";
-  const outputOptions = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
+  const filter = "[0:v:0]setpts=PTS-STARTPTS[base];[1:v:0]setpts=PTS-STARTPTS[caption];[base][caption]overlay=0:0:format=auto:eof_action=repeat:repeatlast=1[v]";
+  const outputOptions = ["-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
   try {
     await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", ...outputOptions, outputName);
   } catch (error) {
@@ -833,7 +827,7 @@ async function captionClip(ffmpeg, inputName, captionName, outputName) {
 }
 
 async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter) {
-  const common = ["-vf", filter, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
+  const common = ["-vf", filter, "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
   try {
     await runFfmpeg(ffmpeg, "-i", inputName, "-map", "0:v:0", "-map", "0:a:0", ...common, outputName);
   } catch (error) {
