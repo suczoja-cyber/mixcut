@@ -14,7 +14,7 @@ const state = {
   files: { hooks: [], bodies: [], ctas: [] },
   partCount: 3,
   hookMode: "manual",
-  ai: { rawClip: null, hookText: "", paraphrases: [], selectedStyleIds: captionStyles.map((style) => style.id), previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
+  ai: { rawClip: null, copyMode: "paste", hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: captionStyles.map((style) => style.id), previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
   zipBlob: null
 };
 const limits = { maxCombinations: 100 };
@@ -127,10 +127,12 @@ function previewGridMarkup() {
 
 function aiHookMarkup() {
   const raw = state.ai.rawClip;
+  const usingClaude = state.ai.copyMode === "claude";
+  const copyText = usingClaude ? state.ai.hookText : state.ai.manualHookText;
   const review = state.ai.paraphrases.length ? `<div class="paraphrase-review"><div class="review-heading"><div><b>Choose the lines to preview</b><small>${selectedParaphrases().length} of ${state.ai.paraphrases.length} selected</small></div></div>${state.ai.paraphrases.map((item, index) => `<label class="paraphrase-option"><input type="checkbox" data-paraphrase="${item.id}" ${item.selected ? "checked" : ""}><span>${index + 1}</span><p>${escapeHtml(item.text)}</p></label>`).join("")}</div>` : "";
   return `<div class="ai-hook-panel">
     ${raw ? `<div class="raw-hook-clip"><video src="${raw.url}" muted preload="metadata"></video><div><b>${escapeHtml(raw.file.name)}</b><span>${formatBytes(raw.file.size)} · raw textless clip</span></div><button type="button" id="removeRawHook" aria-label="Remove raw hook">×</button></div>` : `<label class="drop-zone raw-hook-zone" id="rawHookDrop"><input type="file" id="rawHookInput"><span class="upload-icon">+</span><b>Add one raw, textless hook</b><small>Drop it here or <u>choose from Photos</u></small></label>`}
-    <div class="ai-copy-form"><label for="hookText">Original hook line</label><textarea id="hookText" maxlength="300" rows="3" placeholder="12 years of school and nobody told me about this">${escapeHtml(state.ai.hookText)}</textarea><button type="button" id="generateParaphrases" ${state.ai.loading ? "disabled" : ""}>${state.ai.loading ? "Claude is writing…" : state.ai.paraphrases.length ? "Regenerate paraphrases" : "Generate paraphrases"}<span>✦</span></button>${state.ai.error ? `<p class="ai-error">${escapeHtml(state.ai.error)}</p>` : ""}<small class="privacy-note">Only this text is sent to Claude. Your video stays in this browser.</small></div>
+    <div class="ai-copy-form"><div class="copy-source-switch" role="group" aria-label="Hook text source"><button type="button" data-copy-mode="paste" class="${!usingClaude ? "active" : ""}">Paste my hook lines</button><button type="button" data-copy-mode="claude" class="${usingClaude ? "active" : ""}">Generate with Claude <span>✦</span></button></div><label for="hookText">${usingClaude ? "Original hook line" : "Your hook lines · one per line"}</label><textarea id="hookText" maxlength="${usingClaude ? 300 : 4000}" rows="${usingClaude ? 3 : 6}" placeholder="${usingClaude ? "12 years of school and nobody told me about this" : "12 years of school and nobody told me about this&#10;Nobody teaches you this in school&#10;I wish I had learned this years ago"}">${escapeHtml(copyText)}</textarea><button class="copy-action" type="button" id="${usingClaude ? "generateParaphrases" : "useManualHooks"}" ${state.ai.loading ? "disabled" : ""}>${usingClaude ? (state.ai.loading ? "Claude is writing…" : state.ai.paraphrases.length ? "Regenerate paraphrases" : "Generate paraphrases") : (state.ai.paraphrases.length ? "Replace with these hook lines" : "Use these hook lines")}<span>${usingClaude ? "✦" : "→"}</span></button>${state.ai.error ? `<p class="ai-error">${escapeHtml(state.ai.error)}</p>` : ""}<small class="privacy-note">${usingClaude ? "Only this text is sent to Claude. Your video stays in this browser." : "No API call. Blank lines are ignored and your text stays in this browser."}</small></div>
     ${review}
     ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>Choose style presets</b><small>Font, color, position and animation are shown below.</small></div><div class="caption-style-row">${captionStyles.map((style) => `<label class="style-pill ${state.ai.selectedStyleIds.includes(style.id) ? "selected" : ""}"><input type="checkbox" data-caption-style="${style.id}" ${state.ai.selectedStyleIds.includes(style.id) ? "checked" : ""}><b>${style.label}</b><span>${style.detail}</span><em>${style.position.x}% × ${style.position.y}% · ${style.animation}</em></label>`).join("")}</div></div>` : ""}
     ${previewGridMarkup()}
@@ -145,7 +147,7 @@ function render() {
   $("uploadGrid").innerHTML = parts.map((part, index) => {
     const definition = partDefinitions[part];
     const count = partCountFor(part);
-    const hookSwitch = part === "hooks" ? `<div class="hook-mode-switch" role="group" aria-label="Hook source"><button type="button" data-hook-mode="manual" class="${state.hookMode === "manual" ? "active" : ""}">Upload my clips</button><button type="button" data-hook-mode="ai" class="${state.hookMode === "ai" ? "active" : ""}">AI hook generator <span>✦</span></button></div>` : "";
+    const hookSwitch = part === "hooks" ? `<div class="hook-mode-switch" role="group" aria-label="Hook source"><button type="button" data-hook-mode="manual" class="${state.hookMode === "manual" ? "active" : ""}">Upload finished hook clips</button><button type="button" data-hook-mode="ai" class="${state.hookMode === "ai" ? "active" : ""}">Create captioned hooks <span>✦</span></button></div>` : "";
     const content = part === "hooks" && state.hookMode === "ai" ? aiHookMarkup() : standardUploadMarkup(part);
     return `<section class="upload-card ${part === "hooks" && state.hookMode === "ai" ? "ai-hook-card" : ""}" data-part="${part}"><div class="card-heading"><span class="part-number">0${index + 1}</span><div><h3>${definition.label}</h3><p>${definition.help}</p></div><span class="file-count">${count} ${count === 1 ? "clip" : "clips"}</span></div>${hookSwitch}${content}</section>`;
   }).join("");
@@ -190,8 +192,10 @@ function bindAiEvents() {
   const rawDrop = $("rawHookDrop");
   if (rawDrop) bindDropZone(rawDrop, setRawHook);
   if ($("removeRawHook")) $("removeRawHook").addEventListener("click", removeRawHook);
-  if ($("hookText")) $("hookText").addEventListener("input", (event) => { state.ai.hookText = event.target.value; });
+  document.querySelectorAll("[data-copy-mode]").forEach((button) => button.addEventListener("click", () => { state.ai.copyMode = button.dataset.copyMode; state.ai.error = ""; render(); }));
+  if ($("hookText")) $("hookText").addEventListener("input", (event) => { if (state.ai.copyMode === "claude") state.ai.hookText = event.target.value; else state.ai.manualHookText = event.target.value; });
   if ($("generateParaphrases")) $("generateParaphrases").addEventListener("click", generateParaphrases);
+  if ($("useManualHooks")) $("useManualHooks").addEventListener("click", applyManualHookLines);
   document.querySelectorAll("[data-paraphrase]").forEach((checkbox) => checkbox.addEventListener("change", () => {
     const item = state.ai.paraphrases.find((candidate) => candidate.id === checkbox.dataset.paraphrase);
     if (item) item.selected = checkbox.checked;
@@ -375,6 +379,33 @@ function roundedRect(context, x, y, width, height, radius) {
   context.arcTo(x, y + height, x, y, r);
   context.arcTo(x, y, x + width, y, r);
   context.closePath();
+}
+
+function applyManualHookLines() {
+  const lines = state.ai.manualHookText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const uniqueLines = [...new Map(lines.map((line) => [line.toLocaleLowerCase(), line])).values()];
+  if (!uniqueLines.length) {
+    state.ai.error = "Paste at least one hook line.";
+    render();
+    return;
+  }
+  if (uniqueLines.length > 30) {
+    state.ai.error = "Use 30 hook lines or fewer in one batch.";
+    render();
+    return;
+  }
+  if (uniqueLines.some((line) => line.length > 300)) {
+    state.ai.error = "Each hook must be 300 characters or fewer.";
+    render();
+    return;
+  }
+  state.ai.error = "";
+  state.ai.paraphrases = uniqueLines.map((text) => ({ id: crypto.randomUUID(), text, selected: true }));
+  syncPreviewVariants();
+  resetResult();
+  render();
+  if (state.ai.rawClip) refreshAiPreviews(false);
+  showToast(`${uniqueLines.length} hook ${uniqueLines.length === 1 ? "line is" : "lines are"} ready to style.`);
 }
 
 async function generateParaphrases() {
@@ -576,7 +607,7 @@ function safeUnlink(ffmpeg, name) { try { ffmpeg.FS("unlink", name); } catch (er
 function setBusy(busy) {
   $("generateButton").disabled = busy || !activeParts().every(isPartReady) || totalCombinations() > limits.maxCombinations;
   $("aspectRatio").disabled = busy;
-  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],#rawHookInput,#generateParaphrases,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
+  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-caption-style],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
   $("generateButton").querySelector("span").textContent = busy ? "Making your videos…" : "Make every variation";
   if (busy) updateWorkflow(3, true);
 }
