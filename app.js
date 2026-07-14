@@ -8,7 +8,20 @@ const partSets = { 2: ["hooks", "bodies"], 3: ["hooks", "bodies", "ctas"] };
 const captionColors = [
   { id: "white", label: "White", color: "#FFFFFF" },
   { id: "yellow", label: "Yellow", color: "#F3D82E" },
-  { id: "pink", label: "8x pink", color: "#FF7373" }
+  { id: "pink", label: "8x pink", color: "#FF7373" },
+  { id: "black", label: "Black", color: "#111111" },
+  { id: "blue", label: "Blue", color: "#2F63FF" },
+  { id: "red", label: "Red", color: "#FF3B30" },
+  { id: "green", label: "Green", color: "#34C759" },
+  { id: "orange", label: "Orange", color: "#FF9500" },
+  { id: "purple", label: "Purple", color: "#AF52DE" }
+];
+const captionFonts = [
+  { id: "classic", label: "Classic", family: "Arial, Helvetica, sans-serif", weight: 800 },
+  { id: "modern", label: "Modern", family: "Avenir Next, Helvetica Neue, Arial, sans-serif", weight: 700 },
+  { id: "bold", label: "Bold", family: "Arial Black, Arial, sans-serif", weight: 900 },
+  { id: "serif", label: "Serif", family: "Georgia, Times New Roman, serif", weight: 700 },
+  { id: "snapchat", label: "Snapchat", family: "Avenir Next, Helvetica Neue, Arial, sans-serif", weight: 700, boxColor: "rgba(0,0,0,.58)", strokeWidth: 0 }
 ];
 const captionPositions = [
   { id: "lower", label: "Lower third", detail: "lower 70%", position: { x: 50, y: 70 } },
@@ -19,7 +32,7 @@ const state = {
   files: { hooks: [], bodies: [], ctas: [] },
   partCount: 3,
   hookMode: "manual",
-  ai: { rawClip: null, copyMode: "paste", selectedColorIds: ["white", "yellow", "pink"], selectedPositionIds: ["lower", "center", "top"], bodyTextMode: "none", ctaTextMode: "none", bodyCaption: "", ctaCaption: "", positionAdjustments: Object.fromEntries(["hooks", "bodies", "ctas"].map((part) => [part, Object.fromEntries(captionPositions.map((position) => [position.id, { size: 100, x: 0, y: 0 }]))])), sectionFrames: { bodies: null, ctas: null }, sectionPreviewing: { bodies: false, ctas: false }, sectionPreviewError: { bodies: "", ctas: "" }, hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: [], previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
+  ai: { rawClip: null, copyMode: "paste", selectedColorIds: ["white"], selectedFontIds: ["classic"], selectedPositionIds: ["lower"], bodySelectedColorIds: ["white"], bodySelectedFontIds: ["classic"], bodySelectedPositionIds: ["lower"], ctaSelectedColorIds: ["white"], ctaSelectedFontIds: ["classic"], ctaSelectedPositionIds: ["lower"], bodyDesignMode: "same", ctaDesignMode: "same", bodyTextMode: "none", ctaTextMode: "none", bodyCaption: "", ctaCaption: "", positionAdjustments: Object.fromEntries(["hooks", "bodies", "ctas"].map((part) => [part, Object.fromEntries(captionPositions.map((position) => [position.id, { size: 100, x: 0, y: 0 }]))])), sectionFrames: { bodies: null, ctas: null }, sectionPreviewing: { bodies: false, ctas: false }, sectionPreviewError: { bodies: "", ctas: "" }, hookText: "", manualHookText: "", paraphrases: [], selectedStyleIds: [], previewVariants: [], frame: null, previewing: false, previewError: "", loading: false, error: "" },
   zipBlob: null
 };
 const limits = { maxCombinations: 100 };
@@ -46,24 +59,36 @@ $("aspectRatio").addEventListener("change", () => { resetResult(); render(); if 
 
 function activeParts() { return partSets[state.partCount]; }
 function selectedParaphrases() { return state.ai.paraphrases.filter((item) => item.selected); }
-function availableCaptionStyles() {
-  const colors = captionColors.filter((color) => state.ai.selectedColorIds.includes(color.id));
-  const positions = captionPositions.filter((position) => state.ai.selectedPositionIds.includes(position.id));
-  return positions.flatMap((position) => colors.map((color) => makeCaptionStyle(color, position)));
+function designIds(part, kind) {
+  if (part === "hooks") return state.ai[`selected${kind}Ids`];
+  return state.ai[`${part === "bodies" ? "body" : "cta"}Selected${kind}Ids`];
 }
-function makeCaptionStyle(color, placement) {
+function setDesignIds(part, kind, ids) {
+  if (part === "hooks") state.ai[`selected${kind}Ids`] = ids;
+  else state.ai[`${part === "bodies" ? "body" : "cta"}Selected${kind}Ids`] = ids;
+}
+function availableCaptionStyles(part = "hooks") {
+  const colors = captionColors.filter((color) => designIds(part, "Color").includes(color.id));
+  const fonts = captionFonts.filter((font) => designIds(part, "Font").includes(font.id));
+  const positions = captionPositions.filter((position) => designIds(part, "Position").includes(position.id));
+  return positions.flatMap((position) => colors.flatMap((color) => fonts.map((font) => makeCaptionStyle(color, font, position))));
+}
+function makeCaptionStyle(color, font, placement) {
+  const darkText = color.id === "black";
   return styleWithExtra({
-    id: `${color.id}-${placement.id}`,
+    id: `${color.id}-${font.id}-${placement.id}`,
     colorId: color.id,
+    fontId: font.id,
     positionId: placement.id,
-    label: `${color.label} · ${placement.label}`,
-    detail: `${color.label} text · ${placement.detail}`,
-    font: "Sans",
-    fontFamily: "Arial, Helvetica, sans-serif",
+    label: `${color.label} · ${font.label} · ${placement.label}`,
+    detail: `${color.label} · ${font.label} · ${placement.detail}`,
+    font: font.label,
+    fontFamily: font.family,
+    fontWeight: font.weight,
     color: color.color,
-    strokeColor: "#000000",
-    strokeWidth: 5,
-    boxColor: null,
+    strokeColor: darkText ? "#FFFFFF" : "#000000",
+    strokeWidth: font.strokeWidth ?? 5,
+    boxColor: font.boxColor || null,
     position: placement.position,
     animation: "Static"
   });
@@ -81,25 +106,43 @@ function styleWithExtra(style) {
 function selectedStyles() { return availableCaptionStyles().filter((style) => state.ai.selectedStyleIds.includes(style.id)); }
 function selectedPreviewVariants() { return state.ai.previewVariants.filter((variant) => variant.selected); }
 function sectionTextMode(part) { return part === "bodies" ? state.ai.bodyTextMode : state.ai.ctaTextMode; }
+function sectionDesignMode(part) { return part === "bodies" ? state.ai.bodyDesignMode : state.ai.ctaDesignMode; }
+function sectionStyles(part) { return sectionDesignMode(part) === "same" ? selectedStyles() : availableCaptionStyles(part); }
 function sectionCaptionLines(part) { return (part === "bodies" ? state.ai.bodyCaption : state.ai.ctaCaption).split(/\r?\n/).map((line) => line.trim()).filter(Boolean); }
 function adjustedCaptionStyle(style, part) {
   const adjustment = state.ai.positionAdjustments[part][style.positionId] || { size: 100, x: 0, y: 0 };
   return { ...style, fontScale: adjustment.size / 100, position: { x: Math.max(0, Math.min(100, style.position.x + adjustment.x)), y: Math.max(0, Math.min(100, style.position.y + adjustment.y)) } };
 }
 function positionAdjustmentMarkup(part) {
-  const positions = captionPositions.filter((position) => state.ai.selectedPositionIds.includes(position.id));
+  const positions = captionPositions.filter((position) => designIds(part, "Position").includes(position.id));
   return `<div class="position-adjustments"><div><b>Fine-tune each position for ${partDefinitions[part].singular}</b><small>Changes apply only to that position in this video part.</small></div>${positions.map((position) => { const value = state.ai.positionAdjustments[part][position.id]; return `<fieldset class="position-adjust-row"><legend>${position.label}</legend><label><span>Size %</span><input type="number" min="50" max="200" step="5" value="${value.size}" data-position-adjust-part="${part}" data-position-adjust-id="${position.id}" data-position-adjust-key="size"></label><label><span>Left / right</span><input type="number" min="-50" max="50" step="1" value="${value.x}" data-position-adjust-part="${part}" data-position-adjust-id="${position.id}" data-position-adjust-key="x"></label><label><span>Up / down</span><input type="number" min="-50" max="50" step="1" value="${value.y}" data-position-adjust-part="${part}" data-position-adjust-id="${position.id}" data-position-adjust-key="y"></label></fieldset>`; }).join("")}<small>0 keeps the base position. Negative moves left/up; positive moves right/down.</small></div>`;
+}
+function designPickerMarkup(part, start = 1) {
+  const colors = designIds(part, "Color");
+  const fonts = designIds(part, "Font");
+  const positions = designIds(part, "Position");
+  const colorPicker = `<div class="variation-choice"><div><b>${start}. Choose colors</b><small>Each checked color creates a variation.</small></div><div class="choice-grid color-grid">${captionColors.map((color) => `<label class="choice-pill ${colors.includes(color.id) ? "selected" : ""}"><input type="checkbox" data-design-part="${part}" data-caption-color="${color.id}" ${colors.includes(color.id) ? "checked" : ""}><i style="--swatch:${color.color}"></i>${color.label}</label>`).join("")}</div></div>`;
+  const fontPicker = `<div class="variation-choice"><div><b>${start + 1}. Choose fonts</b><small>Snapchat includes its familiar translucent caption bar.</small></div><div class="choice-grid font-grid">${captionFonts.map((font) => `<label class="choice-pill font-pill ${fonts.includes(font.id) ? "selected" : ""}" style="--font:${font.family}"><input type="checkbox" data-design-part="${part}" data-caption-font="${font.id}" ${fonts.includes(font.id) ? "checked" : ""}><span>${font.label}</span></label>`).join("")}</div></div>`;
+  const positionPicker = `<div class="variation-choice"><div><b>${start + 2}. Choose positions</b><small>Every chosen color and font is made in every checked position.</small></div><div class="choice-grid">${captionPositions.map((position) => `<label class="choice-pill ${positions.includes(position.id) ? "selected" : ""}"><input type="checkbox" data-design-part="${part}" data-caption-position="${position.id}" ${positions.includes(position.id) ? "checked" : ""}>${position.label}</label>`).join("")}</div></div>`;
+  return `${colorPicker}${fontPicker}${positionPicker}${positionAdjustmentMarkup(part)}`;
 }
 function hookVariantCount() { return state.hookMode === "manual" ? state.files.hooks.length : (state.ai.rawClip && state.ai.frame ? selectedPreviewVariants().length : 0); }
 function partCountFor(part) {
   if (part === "hooks") return hookVariantCount();
-  if (state.hookMode === "ai" && (part === "bodies" || part === "ctas") && sectionTextMode(part) === "custom") return state.files[part].length * sectionCaptionLines(part).length;
+  if (state.hookMode === "ai" && (part === "bodies" || part === "ctas")) {
+    const textFactor = sectionTextMode(part) === "custom" ? sectionCaptionLines(part).length : 1;
+    const designFactor = sectionTextMode(part) !== "none" && sectionDesignMode(part) === "custom" ? availableCaptionStyles(part).length : 1;
+    return state.files[part].length * textFactor * designFactor;
+  }
   return state.files[part].length;
 }
 function isPartReady(part) {
   if (part !== "hooks" || state.hookMode === "manual") {
     const hasClips = state.files[part].length > 0;
-    if (state.hookMode === "ai" && (part === "bodies" || part === "ctas") && sectionTextMode(part) === "custom") return hasClips && sectionCaptionLines(part).length > 0;
+    if (state.hookMode === "ai" && (part === "bodies" || part === "ctas")) {
+      if (sectionTextMode(part) === "custom" && !sectionCaptionLines(part).length) return false;
+      if (sectionTextMode(part) !== "none" && sectionDesignMode(part) === "custom" && !availableCaptionStyles(part).length) return false;
+    }
     return hasClips;
   }
   return Boolean(state.ai.rawClip && state.ai.frame && selectedPreviewVariants().length);
@@ -171,7 +214,7 @@ function sectionPreviewMarkup(part) {
   const mode = sectionTextMode(part);
   const firstHook = selectedParaphrases()[0]?.text || "Your hook text";
   const lines = mode === "custom" ? sectionCaptionLines(part) : [mode === "same" ? firstHook : ""];
-  const styles = mode === "none" ? [{ id: "no-text", label: "No text", position: { x: 50, y: 50 } }] : selectedStyles();
+  const styles = mode === "none" ? [{ id: "no-text", label: "No text", position: { x: 50, y: 50 } }] : sectionStyles(part);
   const cards = lines.flatMap((text, lineIndex) => styles.map((style) => {
     const adjusted = mode === "none" ? style : adjustedCaptionStyle(style, part);
     const key = `${part}--${lineIndex}--${style.id}`;
@@ -185,9 +228,11 @@ function standardUploadMarkup(part) {
   const definition = partDefinitions[part];
   const captionValue = part === "bodies" ? state.ai.bodyCaption : state.ai.ctaCaption;
   const mode = sectionTextMode(part);
+  const designMode = sectionDesignMode(part);
   const lineCount = sectionCaptionLines(part).length;
   const sectionName = definition.singular === "body" ? "Body" : "CTA";
-  const captionEditor = state.hookMode === "ai" && (part === "bodies" || part === "ctas") ? `<div class="part-caption-editor"><span>${sectionName} on-screen text</span><div class="section-text-switch" role="group" aria-label="${sectionName} text behavior"><button type="button" data-section-text-mode="none" data-section-text-part="${part}" class="${mode === "none" ? "active" : ""}">No text</button><button type="button" data-section-text-mode="same" data-section-text-part="${part}" class="${mode === "same" ? "active" : ""}">Keep hook text</button><button type="button" data-section-text-mode="custom" data-section-text-part="${part}" class="${mode === "custom" ? "active" : ""}">Different text</button></div>${mode !== "none" ? positionAdjustmentMarkup(part) : ""}${mode === "custom" ? `<label><span>${sectionName} text variations · one per line</span><textarea data-part-caption="${part}" rows="4" maxlength="2000" placeholder="Version one&#10;Version two&#10;Version three">${escapeHtml(captionValue)}</textarea></label><small>${lineCount || 0} text ${lineCount === 1 ? "variation" : "variations"} × ${state.files[part].length} uploaded ${state.files[part].length === 1 ? "clip" : "clips"}. Colors and base positions follow the hook; the controls above fine-tune this part.</small>` : `<small>${mode === "same" ? "The exact hook text continues through this section." : "No caption will be added to this section."}</small>`}</div>` : "";
+  const designEditor = mode === "none" ? "" : `<div class="section-design-editor"><span>${sectionName} text design</span><div class="section-design-switch" role="group" aria-label="${sectionName} text design"><button type="button" data-section-design-mode="same" data-section-design-part="${part}" class="${designMode === "same" ? "active" : ""}">Keep hook design</button><button type="button" data-section-design-mode="custom" data-section-design-part="${part}" class="${designMode === "custom" ? "active" : ""}">Customize design</button></div>${designMode === "custom" ? designPickerMarkup(part) : `<small>Font, color, and position will match each hook variation.</small>`}</div>`;
+  const captionEditor = state.hookMode === "ai" && (part === "bodies" || part === "ctas") ? `<div class="part-caption-editor"><span>${sectionName} on-screen text</span><div class="section-text-switch" role="group" aria-label="${sectionName} text behavior"><button type="button" data-section-text-mode="none" data-section-text-part="${part}" class="${mode === "none" ? "active" : ""}">No text</button><button type="button" data-section-text-mode="same" data-section-text-part="${part}" class="${mode === "same" ? "active" : ""}">Keep hook text</button><button type="button" data-section-text-mode="custom" data-section-text-part="${part}" class="${mode === "custom" ? "active" : ""}">Different text</button></div>${mode === "custom" ? `<label><span>${sectionName} text variations · one per line</span><textarea data-part-caption="${part}" rows="4" maxlength="2000" placeholder="Version one&#10;Version two&#10;Version three">${escapeHtml(captionValue)}</textarea></label><small>${lineCount || 0} text ${lineCount === 1 ? "variation" : "variations"} × ${state.files[part].length} uploaded ${state.files[part].length === 1 ? "clip" : "clips"}.</small>` : `<small>${mode === "same" ? "The exact hook text continues through this section." : "No caption will be added to this section."}</small>`}${designEditor}</div>` : "";
   return `<label class="drop-zone" data-drop="${part}"><input type="file" data-input="${part}" multiple><span class="upload-icon">+</span><b>Drop ${definition.singular} videos here</b><small>or <u>choose from Photos</u></small></label><div class="clip-list">${state.files[part].map((clip) => clipMarkup(clip, part)).join("")}</div>${captionEditor}${sectionPreviewMarkup(part)}`;
 }
 
@@ -222,14 +267,12 @@ function aiHookMarkup() {
   const copyText = usingClaude ? state.ai.hookText : state.ai.manualHookText;
   const styles = availableCaptionStyles();
   const variationCount = selectedParaphrases().length * styles.length;
-  const colorPicker = `<div class="variation-choice"><div><b>1. Choose colors</b><small>Each checked color creates a variation.</small></div><div class="choice-grid">${captionColors.map((color) => `<label class="choice-pill ${state.ai.selectedColorIds.includes(color.id) ? "selected" : ""}"><input type="checkbox" data-caption-color="${color.id}" ${state.ai.selectedColorIds.includes(color.id) ? "checked" : ""}><i style="--swatch:${color.color}"></i>${color.label}</label>`).join("")}</div></div>`;
-  const positionPicker = `<div class="variation-choice"><div><b>2. Choose positions</b><small>Every selected color is made in every checked position.</small></div><div class="choice-grid">${captionPositions.map((position) => `<label class="choice-pill ${state.ai.selectedPositionIds.includes(position.id) ? "selected" : ""}"><input type="checkbox" data-caption-position="${position.id}" ${state.ai.selectedPositionIds.includes(position.id) ? "checked" : ""}>${position.label}</label>`).join("")}</div></div>`;
   const review = state.ai.paraphrases.length ? `<div class="paraphrase-review"><div class="review-heading"><div><b>Choose the lines to preview</b><small>${selectedParaphrases().length} of ${state.ai.paraphrases.length} selected</small></div></div>${state.ai.paraphrases.map((item, index) => `<label class="paraphrase-option"><input type="checkbox" data-paraphrase="${item.id}" ${item.selected ? "checked" : ""}><span>${index + 1}</span><p>${escapeHtml(item.text)}</p></label>`).join("")}</div>` : "";
   return `<div class="ai-hook-panel">
     ${raw ? `<div class="raw-hook-clip"><video src="${raw.url}" muted preload="metadata"></video><div><b>${escapeHtml(raw.file.name)}</b><span>${formatBytes(raw.file.size)} · raw textless clip</span></div><button type="button" id="removeRawHook" aria-label="Remove raw hook">×</button></div>` : `<label class="drop-zone raw-hook-zone" id="rawHookDrop"><input type="file" id="rawHookInput" accept="video/*,.mp4,.mov,.m4v,.webm,.hevc"><span class="upload-icon">+</span><b>Add one raw, textless hook</b><small>Required for thumbnails · drop it here or <u>choose from Photos</u></small></label>`}
     <div class="ai-copy-form"><div class="copy-source-switch" role="group" aria-label="Hook text source"><button type="button" data-copy-mode="paste" class="${!usingClaude ? "active" : ""}">Paste my hook lines</button><button type="button" data-copy-mode="claude" class="${usingClaude ? "active" : ""}">Generate with Claude <span>✦</span></button></div><label for="hookText">${usingClaude ? "Original hook line" : "Your hook lines · one per line"}</label><textarea id="hookText" maxlength="${usingClaude ? 300 : 4000}" rows="${usingClaude ? 3 : 6}" placeholder="${usingClaude ? "12 years of school and nobody told me about this" : "12 years of school and nobody told me about this&#10;Nobody teaches you this in school&#10;I wish I had learned this years ago"}">${escapeHtml(copyText)}</textarea><button class="copy-action" type="button" id="${usingClaude ? "generateParaphrases" : "useManualHooks"}" ${state.ai.loading ? "disabled" : ""}>${usingClaude ? (state.ai.loading ? "Claude is writing…" : state.ai.paraphrases.length ? "Regenerate paraphrases" : "Generate paraphrases") : (state.ai.paraphrases.length ? "Replace with these hook lines" : "Use these hook lines")}<span>${usingClaude ? "✦" : "→"}</span></button>${state.ai.error ? `<p class="ai-error">${escapeHtml(state.ai.error)}</p>` : ""}<small class="privacy-note">${usingClaude ? "Only this text is sent to Claude. Your video stays in this browser." : "No API call. Blank lines are ignored and your text stays in this browser."}</small></div>
     ${review}
-    ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>Build your caption variations</b><small>${selectedParaphrases().length} selected hooks × ${state.ai.selectedColorIds.length} colors × ${state.ai.selectedPositionIds.length} positions = ${variationCount} captioned hooks</small></div>${colorPicker}${positionPicker}${positionAdjustmentMarkup("hooks")}</div>` : ""}
+    ${state.ai.paraphrases.length ? `<div class="style-picker"><div><b>Build your caption variations</b><small>${selectedParaphrases().length} hooks × ${state.ai.selectedColorIds.length} colors × ${state.ai.selectedFontIds.length} fonts × ${state.ai.selectedPositionIds.length} positions = ${variationCount} captioned hooks</small></div>${designPickerMarkup("hooks")}</div>` : ""}
     ${previewGridMarkup()}
   </div>`;
 }
@@ -242,7 +285,8 @@ function render() {
   $("uploadGrid").innerHTML = parts.map((part, index) => {
     const definition = partDefinitions[part];
     const count = partCountFor(part);
-    const countUnit = state.hookMode === "ai" && part !== "hooks" && sectionTextMode(part) === "custom" ? (count === 1 ? "variation" : "variations") : (count === 1 ? "clip" : "clips");
+    const hasSectionVariations = state.hookMode === "ai" && part !== "hooks" && (sectionTextMode(part) === "custom" || (sectionTextMode(part) !== "none" && sectionDesignMode(part) === "custom"));
+    const countUnit = hasSectionVariations ? (count === 1 ? "variation" : "variations") : (count === 1 ? "clip" : "clips");
     const hookSwitch = part === "hooks" ? `<div class="hook-mode-switch" role="group" aria-label="Hook source"><button type="button" data-hook-mode="manual" class="${state.hookMode === "manual" ? "active" : ""}">Upload finished hook clips</button><button type="button" data-hook-mode="ai" class="${state.hookMode === "ai" ? "active" : ""}">Create captioned hooks <span>✦</span></button></div>` : "";
     const content = part === "hooks" && state.hookMode === "ai" ? aiHookMarkup() : standardUploadMarkup(part);
     return `<section class="upload-card ${part === "hooks" && state.hookMode === "ai" ? "ai-hook-card" : ""}" data-part="${part}"><div class="card-heading"><span class="part-number">0${index + 1}</span><div><h3>${definition.label}</h3><p>${definition.help}</p></div><span class="file-count">${count} ${countUnit}</span></div>${hookSwitch}${content}</section>`;
@@ -297,6 +341,12 @@ function bindAiEvents() {
     render();
     refreshSectionPreview(button.dataset.sectionTextPart, false);
   }));
+  document.querySelectorAll("[data-section-design-mode]").forEach((button) => button.addEventListener("click", () => {
+    if (button.dataset.sectionDesignPart === "bodies") state.ai.bodyDesignMode = button.dataset.sectionDesignMode; else state.ai.ctaDesignMode = button.dataset.sectionDesignMode;
+    resetResult();
+    render();
+    refreshSectionPreview(button.dataset.sectionDesignPart, false);
+  }));
   document.querySelectorAll("[data-part-caption]").forEach((field) => {
     field.addEventListener("input", () => { if (field.dataset.partCaption === "bodies") state.ai.bodyCaption = field.value; else state.ai.ctaCaption = field.value; });
     field.addEventListener("change", () => { resetResult(); render(); refreshSectionPreview(field.dataset.partCaption, false); });
@@ -317,21 +367,32 @@ function bindAiEvents() {
   if ($("generateParaphrases")) $("generateParaphrases").addEventListener("click", generateParaphrases);
   if ($("useManualHooks")) $("useManualHooks").addEventListener("click", applyManualHookLines);
   document.querySelectorAll("[data-caption-color]").forEach((checkbox) => checkbox.addEventListener("change", () => {
-    state.ai.selectedColorIds = checkbox.checked ? [...new Set([...state.ai.selectedColorIds, checkbox.dataset.captionColor])] : state.ai.selectedColorIds.filter((id) => id !== checkbox.dataset.captionColor);
-    state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id);
-    syncPreviewVariants();
+    const part = checkbox.dataset.designPart || "hooks";
+    const current = designIds(part, "Color");
+    setDesignIds(part, "Color", checkbox.checked ? [...new Set([...current, checkbox.dataset.captionColor])] : current.filter((id) => id !== checkbox.dataset.captionColor));
+    if (part === "hooks") { state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id); syncPreviewVariants(); }
     resetResult();
     render();
-    refreshAiPreviews(false);
+    if (part === "hooks") refreshAiPreviews(false); else refreshSectionPreview(part, false);
+  }));
+  document.querySelectorAll("[data-caption-font]").forEach((checkbox) => checkbox.addEventListener("change", () => {
+    const part = checkbox.dataset.designPart || "hooks";
+    const current = designIds(part, "Font");
+    setDesignIds(part, "Font", checkbox.checked ? [...new Set([...current, checkbox.dataset.captionFont])] : current.filter((id) => id !== checkbox.dataset.captionFont));
+    if (part === "hooks") { state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id); syncPreviewVariants(); }
+    resetResult();
+    render();
+    if (part === "hooks") refreshAiPreviews(false); else refreshSectionPreview(part, false);
   }));
   document.querySelectorAll("[data-caption-position]").forEach((checkbox) => checkbox.addEventListener("change", () => {
-    state.ai.selectedPositionIds = checkbox.checked ? [...new Set([...state.ai.selectedPositionIds, checkbox.dataset.captionPosition])] : state.ai.selectedPositionIds.filter((id) => id !== checkbox.dataset.captionPosition);
-    state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id);
-    syncPreviewVariants();
+    const part = checkbox.dataset.designPart || "hooks";
+    const current = designIds(part, "Position");
+    setDesignIds(part, "Position", checkbox.checked ? [...new Set([...current, checkbox.dataset.captionPosition])] : current.filter((id) => id !== checkbox.dataset.captionPosition));
+    if (part === "hooks") { state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id); syncPreviewVariants(); }
     resetResult();
     render();
-    refreshAiPreviews(false);
-    ["bodies", "ctas"].forEach((part) => { if (state.files[part].length) refreshSectionPreview(part, false); });
+    if (part === "hooks") { refreshAiPreviews(false); ["bodies", "ctas"].forEach((section) => { if (state.files[section].length && sectionDesignMode(section) === "same") refreshSectionPreview(section, false); }); }
+    else refreshSectionPreview(part, false);
   }));
   document.querySelectorAll("[data-paraphrase]").forEach((checkbox) => checkbox.addEventListener("change", () => {
     const item = state.ai.paraphrases.find((candidate) => candidate.id === checkbox.dataset.paraphrase);
@@ -499,7 +560,7 @@ async function paintSectionPreviewCanvases(part) {
   await image.decode();
   const mode = sectionTextMode(part);
   const lines = mode === "custom" ? sectionCaptionLines(part) : [mode === "same" ? (selectedParaphrases()[0]?.text || "Your hook text") : ""];
-  const styles = availableCaptionStyles();
+  const styles = sectionStyles(part);
   document.querySelectorAll(`[data-section-preview-part="${part}"]`).forEach((canvas) => {
     const context = canvas.getContext("2d");
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
@@ -513,7 +574,7 @@ async function paintSectionPreviewCanvases(part) {
 function drawCaptionPreview(context, text, style, width, height) {
   const fontSize = Math.max(8, Math.round(Math.min(width, height) * .072 * (style.fontScale || 1)));
   context.save();
-  context.font = `800 ${fontSize}px ${style.fontFamily}`;
+  context.font = `${style.fontWeight || 800} ${fontSize}px ${style.fontFamily}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.lineJoin = "round";
@@ -823,7 +884,7 @@ async function generateVideos() {
           const captionText = partClip.captionMode === "same" ? combination[0].line.text : partClip.captionText;
           const captionedName = `captioned_${parts[partIndex]}_${captionedPartNames.length + 1}.mp4`;
           safeUnlink(ffmpeg, captionedName);
-          await renderSectionCaption(ffmpeg, normalizedMap[partClip.sourceId], captionText, combination[0].style, captionedName, width, height, partDefinitions[parts[partIndex]].label, percent, index + 1, total);
+          await renderSectionCaption(ffmpeg, normalizedMap[partClip.sourceId], captionText, partClip.captionStyle || combination[0].style, captionedName, width, height, partDefinitions[parts[partIndex]].label, percent, index + 1, total);
           captionedPartMap[partClip.id] = captionedName;
           captionedPartNames.push(captionedName);
         }
@@ -884,13 +945,15 @@ function buildAiHookDescriptors() {
 function buildSectionDescriptors(part) {
   const mode = sectionTextMode(part);
   const lines = mode === "custom" ? sectionCaptionLines(part) : [""];
-  return state.files[part].flatMap((clip) => lines.map((text, index) => ({
+  const styles = mode !== "none" && sectionDesignMode(part) === "custom" ? availableCaptionStyles(part) : [null];
+  return state.files[part].flatMap((clip) => lines.flatMap((text, index) => styles.map((style) => ({
     ...clip,
-    id: `${clip.id}--${mode}-${index}`,
+    id: `${clip.id}--${mode}-${index}--${style?.id || "hook-design"}`,
     sourceId: clip.id,
     captionMode: mode,
-    captionText: text
-  })));
+    captionText: text,
+    captionStyle: style
+  }))));
 }
 
 async function prepareAiHookSource(ffmpeg, width, height, fetchFile) {
@@ -1129,7 +1192,7 @@ function safeUnlink(ffmpeg, name) { try { ffmpeg.FS("unlink", name); } catch (er
 function setBusy(busy) {
   $("generateButton").disabled = busy || !activeParts().every(isPartReady) || totalCombinations() > limits.maxCombinations;
   $("aspectRatio").disabled = busy;
-  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],[data-section-text-mode],[data-part-caption],[data-position-adjust-part],[data-caption-color],[data-caption-position],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
+  document.querySelectorAll("[data-input],[data-parts],[data-hook-mode],[data-copy-mode],[data-section-text-mode],[data-section-design-mode],[data-part-caption],[data-position-adjust-part],[data-caption-color],[data-caption-font],[data-caption-position],#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
   $("generateButton").querySelector("span").textContent = busy ? "Making your videos…" : "Make every variation";
   if (busy) updateWorkflow(3, true);
 }
