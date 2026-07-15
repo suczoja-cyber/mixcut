@@ -1027,7 +1027,6 @@ async function generateVideos() {
   const aiTemporaryHookName = "ai_hook_current.mp4";
   try {
     const { fetchFile } = FFmpeg;
-    if (ffmpegInstance?.isLoaded()) disposeVideoEngine(ffmpegInstance);
     ffmpeg = await getVideoEngine();
     const [width, height] = dimensions[$("aspectRatio").value];
     const workingFiles = Object.fromEntries(parts.map((part) => [part, state.files[part]]));
@@ -1118,9 +1117,12 @@ async function generateVideos() {
         }
       }
       updateProgress(percent, `Stitching ${outputName}`, `${index + 1} / ${total}`);
-      const listName = `list_${index}.txt`;
-      const inputNames = combination.map((clip, partIndex) => partIndex === 0 ? normalizedMap[clip.id] : (captionedPartMap[clip.id] || normalizedMap[clip.sourceId]));
-      const listText = inputNames.map((name) => `file '${name}'`).join("\n") + "\n";
+      const listName = `/list_${index}.txt`;
+      const inputNames = combination.map((clip, partIndex) => {
+        if (state.hookMode === "ai" && partIndex > 0) return captionedPartMap[clip.id] || normalizedMap[clip.sourceId];
+        return normalizedMap[clip.id];
+      });
+      const listText = inputNames.map((name) => `file '${absoluteFfmpegPath(ffmpeg, name)}'`).join("\n") + "\n";
       ffmpeg.FS("writeFile", listName, new TextEncoder().encode(listText));
       safeUnlink(ffmpeg, outputName);
       try {
@@ -1156,7 +1158,6 @@ async function generateVideos() {
       safeUnlink(ffmpeg, "shared_body_cta.mp4");
       safeUnlink(ffmpeg, "shared_body_cta.txt");
       if (aiSource) safeUnlink(ffmpeg, aiSource.name);
-      disposeVideoEngine(ffmpeg);
     }
     stopProcessingTimer();
     setBusy(false);
@@ -1333,32 +1334,59 @@ async function renderSectionCaption(ffmpeg, sourceName, text, style, outputName,
 function processingError(message, cause) { const error = new Error(message); error.userMessage = message; error.cause = cause; return error; }
 
 async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
-  safeUnlink(ffmpeg, outputName);
-  try {
-    await runFfmpeg(ffmpeg, "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", outputName);
-    if (fileExists(ffmpeg, outputName)) return;
-  } catch (error) {}
+  const manifestPath = absoluteFfmpegPath(ffmpeg, listName);
+  const inputPaths = inputNames.map((name) => absoluteFfmpegPath(ffmpeg, name));
+  const outputPath = absoluteFfmpegPath(ffmpeg, outputName);
+  const missing = [manifestPath, ...inputPaths].filter((name) => !fileExists(ffmpeg, name));
+  if (missing.length) throw new Error(`Join preflight could not find: ${missing.join(", ")}. Available files: ${ffmpegFileListing(ffmpeg)}`);
 
   safeUnlink(ffmpeg, outputName);
-  await runFfmpeg(ffmpeg,
-    "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", listName,
-    "-map", "0:v:0", "-map", "0:a:0",
-    "-vf", "setpts=PTS-STARTPTS,fps=30,format=yuv420p",
-    "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
-    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
-    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-    "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", outputName
-  );
-  if (!fileExists(ffmpeg, outputName)) throw new Error("The sequential join completed without creating an output video.");
+  let copyError = null;
+  try {
+    await runFfmpeg(ffmpeg, "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", manifestPath, "-c", "copy", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", outputPath);
+    if (fileExists(ffmpeg, outputName)) return;
+    copyError = new Error("The fast join completed without creating an output video.");
+  } catch (error) { copyError = error; }
+
+  safeUnlink(ffmpeg, outputName);
+  const inputArgs = inputPaths.flatMap((name) => ["-i", name]);
+  const preparedStreams = inputPaths.map((_, index) => `[${index}:v:0]setpts=PTS-STARTPTS[v${index}];[${index}:a:0]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a${index}]`).join(";");
+  const concatStreams = inputPaths.map((_, index) => `[v${index}][a${index}]`).join("");
+  const filter = `${preparedStreams};${concatStreams}concat=n=${inputPaths.length}:v=1:a=1[v][a]`;
+  try {
+    await runFfmpeg(ffmpeg,
+      ...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]",
+      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+      "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+      "-movflags", "+faststart", outputPath
+    );
+    if (!fileExists(ffmpeg, outputName)) throw new Error("The direct re-encode join completed without creating an output video.");
+  } catch (error) {
+    throw new Error(`Fast join: ${ffmpegFailureDetail(copyError)} Direct join: ${ffmpegFailureDetail(error)} Available files: ${ffmpegFileListing(ffmpeg)}`);
+  }
 }
 
 async function joinClipPair(ffmpeg, firstName, secondName, outputName, baseName) {
   const filter = "[0:v:0]setpts=PTS-STARTPTS[v0];[0:a:0]asetpts=PTS-STARTPTS[a0];[1:v:0]setpts=PTS-STARTPTS[v1];[1:a:0]asetpts=PTS-STARTPTS[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]";
-  await runFfmpeg(ffmpeg, "-i", firstName, "-i", secondName, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", outputName);
+  await runFfmpeg(ffmpeg, "-i", absoluteFfmpegPath(ffmpeg, firstName), "-i", absoluteFfmpegPath(ffmpeg, secondName), "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", absoluteFfmpegPath(ffmpeg, outputName));
   if (!fileExists(ffmpeg, outputName)) throw new Error("A pair of prepared clips could not be joined.");
 }
 
 function fileExists(ffmpeg, name) { try { return ffmpeg.FS("stat", name).size > 0; } catch (error) { return false; } }
+function absoluteFfmpegPath(ffmpeg, name) {
+  const value = String(name || "");
+  if (value.startsWith("/")) return value;
+  let cwd = "/";
+  try { cwd = ffmpeg.FS("cwd") || "/"; } catch (error) {}
+  return `${cwd.replace(/\/$/, "")}/${value}`;
+}
+function ffmpegFileListing(ffmpeg) {
+  try {
+    const cwd = ffmpeg.FS("cwd") || "/";
+    const list = (path) => ffmpeg.FS("readdir", path).filter((name) => ![".", ".."].includes(name)).slice(0, 40).join(", ") || "none";
+    return `root=[${list("/")}] cwd=${cwd}=[${list(cwd)}]`;
+  } catch (error) { return "unavailable"; }
+}
 
 async function getVideoEngine() {
   if (ffmpegInstance?.isLoaded()) return ffmpegInstance;
@@ -1401,7 +1429,7 @@ async function runFfmpeg(ffmpeg, ...args) {
 
 function cleanFfmpegLine(line) { return String(line || "").replace(/^(?:fferr|ffout|info):\s*/i, "").trim(); }
 function findFfmpegFailure(lines) {
-  const specific = [...lines].reverse().find((line) => !/conversion failed!?\s*$/i.test(line) && /error (?:initializing|reinitializing|while processing)|invalid data|no such file|option not found|cannot allocate memory|out of memory|aborted|failed to inject|failed to configure|resource temporarily unavailable|killed/i.test(line));
+  const specific = [...lines].reverse().find((line) => !/conversion failed!?\s*$/i.test(line) && /error (?:initializing|reinitializing|while processing)|invalid data|no such file|option not found|matches no streams|cannot allocate memory|out of memory|aborted|failed to inject|failed to configure|resource temporarily unavailable|killed/i.test(line));
   return specific || [...lines].reverse().find((line) => /conversion failed/i.test(line));
 }
 function ffmpegFailureDetail(error) {
@@ -1414,6 +1442,10 @@ function baseVideoFilter(width, height) { return `scale=${width}:${height}:force
 
 async function normalizeClip(ffmpeg, inputName, outputName, width, height) {
   await transcodeWithAudioFallback(ffmpeg, inputName, outputName, baseVideoFilter(width, height));
+  if (!fileExists(ffmpeg, outputName)) {
+    const logTail = ffmpegLogLines.slice(-16).map(cleanFfmpegLine).filter(Boolean).join(" | ");
+    throw new Error(`Prepared output ${outputName} was not created.${logTail ? ` FFmpeg: ${logTail}` : " FFmpeg returned no diagnostic output."}`);
+  }
 }
 
 async function createCaptionOverlay(text, style, width, height) {
@@ -1426,24 +1458,29 @@ async function createCaptionOverlay(text, style, width, height) {
 }
 
 async function captionClip(ffmpeg, inputName, captionName, outputName) {
+  const inputPath = absoluteFfmpegPath(ffmpeg, inputName);
+  const captionPath = absoluteFfmpegPath(ffmpeg, captionName);
+  const outputPath = absoluteFfmpegPath(ffmpeg, outputName);
   const filter = "[0:v:0]setpts=PTS-STARTPTS[base];[1:v:0]setpts=PTS-STARTPTS[caption];[base][caption]overlay=0:0:format=auto:eof_action=repeat:repeatlast=1[v]";
   const outputOptions = ["-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
   try {
-    await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", ...outputOptions, outputName);
+    await runFfmpeg(ffmpeg, "-i", inputPath, "-i", captionPath, "-filter_complex", filter, "-map", "[v]", "-map", "0:a:0", ...outputOptions, outputPath);
   } catch (error) {
     safeUnlink(ffmpeg, outputName);
-    await runFfmpeg(ffmpeg, "-i", inputName, "-i", captionName, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-filter_complex", filter, "-map", "[v]", "-map", "2:a:0", ...outputOptions, "-shortest", outputName);
+    await runFfmpeg(ffmpeg, "-i", inputPath, "-i", captionPath, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-filter_complex", filter, "-map", "[v]", "-map", "2:a:0", ...outputOptions, "-shortest", outputPath);
   }
   if (!fileExists(ffmpeg, outputName)) throw new Error("Caption overlay did not create a valid video.");
 }
 
 async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter) {
+  const inputPath = absoluteFfmpegPath(ffmpeg, inputName);
+  const outputPath = absoluteFfmpegPath(ffmpeg, outputName);
   const common = ["-vf", filter, "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"];
   try {
-    await runFfmpeg(ffmpeg, "-i", inputName, "-map", "0:v:0", "-map", "0:a:0", ...common, outputName);
+    await runFfmpeg(ffmpeg, "-i", inputPath, "-map", "0:v:0", "-map", "0:a:0", ...common, outputPath);
   } catch (error) {
     safeUnlink(ffmpeg, outputName);
-    await runFfmpeg(ffmpeg, "-i", inputName, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0", ...common, "-shortest", outputName);
+    await runFfmpeg(ffmpeg, "-i", inputPath, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0", ...common, "-shortest", outputPath);
   }
 }
 
