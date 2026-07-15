@@ -1126,7 +1126,7 @@ async function generateVideos() {
       try {
         await concatenateClips(ffmpeg, inputNames, listName, outputName);
       } catch (cause) {
-        throw processingError("Every clip was prepared, but the final videos could not be joined. Reload the page and try one variation first.", cause);
+        throw processingError(`Every clip was prepared, but the final videos could not be joined. Join error: ${ffmpegFailureDetail(cause)}`, cause);
       }
       zip.add(outputName, ffmpeg.FS("readFile", outputName));
       safeUnlink(ffmpeg, outputName);
@@ -1340,18 +1340,16 @@ async function concatenateClips(ffmpeg, inputNames, listName, outputName) {
   } catch (error) {}
 
   safeUnlink(ffmpeg, outputName);
-  const baseName = listName.replace(/\.txt$/, "");
-  let currentName = inputNames[0];
-  let previousTemporary = null;
-  for (let index = 1; index < inputNames.length; index++) {
-    const targetName = index === inputNames.length - 1 ? outputName : `${baseName}_merged_${index}.mp4`;
-    safeUnlink(ffmpeg, targetName);
-    await joinClipPair(ffmpeg, currentName, inputNames[index], targetName, `${baseName}_pair_${index}`);
-    if (previousTemporary) safeUnlink(ffmpeg, previousTemporary);
-    previousTemporary = targetName === outputName ? null : targetName;
-    currentName = targetName;
-  }
-  if (!fileExists(ffmpeg, outputName)) throw new Error("FFmpeg completed without creating the joined output file.");
+  await runFfmpeg(ffmpeg,
+    "-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", listName,
+    "-map", "0:v:0", "-map", "0:a:0",
+    "-vf", "setpts=PTS-STARTPTS,fps=30,format=yuv420p",
+    "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+    "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", outputName
+  );
+  if (!fileExists(ffmpeg, outputName)) throw new Error("The sequential join completed without creating an output video.");
 }
 
 async function joinClipPair(ffmpeg, firstName, secondName, outputName, baseName) {
