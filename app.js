@@ -835,6 +835,11 @@ async function generateVideos() {
   if (!total || total > limits.maxCombinations || !parts.every(isPartReady)) return;
   if (!window.FFmpeg) return showToast("The video tools couldn't load. Refresh and try again.", true);
 
+  const supabaseJob = window.SupabaseSync?.begin(buildSupabaseSyncPayload(parts, total)).catch((error) => {
+    console.warn("Supabase source backup failed", error);
+    return null;
+  });
+
   setBusy(true);
   ffmpegLogLines = [];
   activeFfmpegCommandLogs = [];
@@ -963,12 +968,14 @@ async function generateVideos() {
     $("successState").hidden = false;
     updateWorkflow(4);
     showToast("Your video variations are ready.");
+    window.SupabaseSync?.complete(supabaseJob, state.zipBlob);
   } catch (error) {
     console.error(error);
     const message = error.userMessage || `A clip could not be processed. ${ffmpegFailureDetail(error)}`;
     $("processTitle").textContent = "We couldn't finish this batch";
     updateProgress(0, message, "Not completed");
     showToast(message, true);
+    window.SupabaseSync?.fail(supabaseJob, message);
   } finally {
     if (ffmpeg) {
       safeUnlink(ffmpeg, aiTemporaryHookName);
@@ -979,6 +986,25 @@ async function generateVideos() {
     stopProcessingTimer();
     setBusy(false);
   }
+}
+
+function buildSupabaseSyncPayload(parts, total) {
+  const files = [];
+  const seen = new Set();
+  const add = (file, part, id) => {
+    if (!file || seen.has(file)) return;
+    seen.add(file);
+    files.push({ file, part, id });
+  };
+  if (state.hookMode === "ai") add(state.ai.rawClip?.file, "hooks", state.ai.rawClip?.id || "raw-hook");
+  parts.forEach((part) => state.files[part].forEach((clip) => add(clip.file, part, clip.id)));
+  return {
+    hookMode: state.hookMode,
+    aspectRatio: $("aspectRatio").value,
+    total,
+    parts: state.parts.map((part) => ({ id: part.id, name: part.name })),
+    files
+  };
 }
 
 function buildAiHookDescriptors() {
