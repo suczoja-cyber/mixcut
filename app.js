@@ -159,7 +159,30 @@ function isPartReady(part) {
   }
   return Boolean(state.ai.rawClip && state.ai.frame && selectedPreviewVariants().length);
 }
-function totalCombinations() { return activeParts().reduce((total, part) => total * partCountFor(part), 1); }
+function fileFingerprint(file) { return file ? `${file.name.toLowerCase()}::${file.size}::${file.lastModified || 0}` : ""; }
+function clipFingerprint(clip) { return clip?.sourceFingerprint || fileFingerprint(clip?.file); }
+function combinationGroups() {
+  const parts = activeParts();
+  if (state.hookMode === "ai") return [buildAiHookDescriptors(), ...parts.slice(1).map(buildSectionDescriptors)];
+  return parts.map((part) => state.files[part] || []);
+}
+function countUniqueCombinations(groups) {
+  let count = 0;
+  const visit = (index, used) => {
+    if (index === groups.length) { count++; return; }
+    groups[index].forEach((clip) => {
+      const fingerprint = clipFingerprint(clip);
+      if (fingerprint && used.has(fingerprint)) return;
+      if (fingerprint) used.add(fingerprint);
+      visit(index + 1, used);
+      if (fingerprint) used.delete(fingerprint);
+    });
+  };
+  visit(0, new Set());
+  return count;
+}
+function unfilteredCombinationCount() { return activeParts().reduce((total, part) => total * partCountFor(part), 1); }
+function totalCombinations() { return countUniqueCombinations(combinationGroups()); }
 function resetResult() { state.zipBlob = null; $("processPanel").hidden = true; }
 
 function projectSettingsSnapshot() {
@@ -487,17 +510,21 @@ function render() {
   if (state.ai.frame && state.ai.previewVariants.length) requestAnimationFrame(paintPreviewCanvases);
   parts.slice(1).forEach((part) => { if (state.ai.sectionFrames[part]) requestAnimationFrame(() => paintSectionPreviewCanvases(part)); });
   const total = totalCombinations();
+  const duplicatePairings = Math.max(0, unfilteredCombinationCount() - total);
   $("formulaStrip").innerHTML = parts.map((part, index) => `${index ? '<span class="formula-symbol">×</span>' : ''}<span class="formula-chip"><b>${partCountFor(part)}</b> ${part === "hooks" && state.hookMode === "ai" ? "generated hooks" : escapeHtml(partDefinition(part).label.toLowerCase())}</span>`).join("") + `<span class="formula-symbol">=</span><span class="formula-chip formula-total"><b>${total}</b> videos</span>`;
 
-  const ready = parts.every(isPartReady) && total <= limits.maxCombinations;
+  const ready = total > 0 && parts.every(isPartReady) && total <= limits.maxCombinations;
   $("generateButton").disabled = !ready;
   $("readyDot").classList.toggle("ready", ready);
-  if (total > limits.maxCombinations) {
+  if (!total && unfilteredCombinationCount() > 0) {
+    $("readyTitle").textContent = "No duplicate-free videos yet";
+    $("readyText").textContent = "At least one part needs a different source clip.";
+  } else if (total > limits.maxCombinations) {
     $("readyTitle").textContent = `${total} combinations is too many for one batch`;
     $("readyText").textContent = `Deselect lines or remove clips to stay at or below ${limits.maxCombinations}.`;
   } else if (ready) {
     $("readyTitle").textContent = `${total} unique ${total === 1 ? "video" : "videos"} ready`;
-    $("readyText").textContent = `${parts.length}-part structure · packed into one ZIP.`;
+    $("readyText").textContent = duplicatePairings ? `${duplicatePairings} duplicate-source ${duplicatePairings === 1 ? "pairing" : "pairings"} excluded · packed into one ZIP.` : `${parts.length}-part structure · packed into one ZIP.`;
   } else {
     const missing = parts.filter((part) => !isPartReady(part)).map((part) => part === "hooks" && state.hookMode === "ai" ? "Selected hook previews" : partDefinition(part).label);
     $("readyTitle").textContent = "Finish every video part";
@@ -1059,7 +1086,7 @@ async function generateVideos() {
     }
 
     const zip = new StoreZipBuilder("8x-variants");
-    const combinations = cartesian(parts.map((part) => workingFiles[part]));
+    const combinations = uniqueCartesian(parts.map((part) => workingFiles[part]));
     let currentAiHookId = null;
     let captionedPartMap = {};
     let captionedPartNames = [];
@@ -1155,10 +1182,11 @@ function buildSupabaseSyncPayload(parts, total) {
 function buildAiHookDescriptors() {
   const styles = availableCaptionStyles();
   const variants = selectedPreviewVariants().slice();
+  const sourceFingerprint = fileFingerprint(state.ai.rawClip?.file);
   return variants.map((variant, index) => {
     const line = state.ai.paraphrases.find((item) => item.id === variant.lineId);
     const style = styles.find((item) => item.id === variant.styleId);
-    return { id: `ai-${variant.id}`, file: { name: `generated-hook-${index + 1}.mp4`, size: 0 }, aiVariant: true, line, style };
+    return { id: `ai-${variant.id}`, file: { name: `generated-hook-${index + 1}.mp4`, size: 0 }, sourceFingerprint, aiVariant: true, line, style };
   }).filter((clip) => clip.line && clip.style);
 }
 
@@ -1404,12 +1432,29 @@ async function transcodeWithAudioFallback(ffmpeg, inputName, outputName, filter)
   }
 }
 
-function cartesian(groups) { return groups.reduce((results, group) => results.flatMap((result) => group.map((item) => [...result, item])), [[]]); }
+function uniqueCartesian(groups) {
+  const results = [];
+  const visit = (index, combination, used) => {
+    if (index === groups.length) { results.push(combination.slice()); return; }
+    groups[index].forEach((clip) => {
+      const fingerprint = clipFingerprint(clip);
+      if (fingerprint && used.has(fingerprint)) return;
+      if (fingerprint) used.add(fingerprint);
+      combination.push(clip);
+      visit(index + 1, combination, used);
+      combination.pop();
+      if (fingerprint) used.delete(fingerprint);
+    });
+  };
+  visit(0, [], new Set());
+  return results;
+}
 function getExtension(name) { const extension = name.split(".").pop().toLowerCase(); return /^[a-z0-9]{2,5}$/.test(extension) ? extension : "mp4"; }
 function safeUnlink(ffmpeg, name) { try { ffmpeg.FS("unlink", name); } catch (error) {} }
 
 function setBusy(busy) {
-  $("generateButton").disabled = busy || !activeParts().every(isPartReady) || totalCombinations() > limits.maxCombinations;
+  const total = totalCombinations();
+  $("generateButton").disabled = busy || !total || !activeParts().every(isPartReady) || total > limits.maxCombinations;
   $("aspectRatio").disabled = busy;
   document.querySelectorAll("[data-input],[data-hook-mode],[data-copy-mode],[data-section-text-mode],[data-section-design-mode],[data-part-caption],[data-position-adjust-part],[data-caption-color],[data-caption-font],[data-caption-position],[data-part-name],[data-remove-video-part],[data-see-more-part],#addPartButton,#rawHookInput,#generateParaphrases,#useManualHooks,[data-paraphrase],[data-preview-variant],#selectAllPreviews,#clearAllPreviews").forEach((element) => element.disabled = busy);
   $("generateButton").querySelector("span").textContent = busy ? "Making your videos…" : "Make every variation";
