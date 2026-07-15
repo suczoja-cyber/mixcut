@@ -721,7 +721,7 @@ function applyManualHookLines() {
 async function generateParaphrases() {
   const hookText = state.ai.hookText.trim();
   if (hookText.length < 5) return showToast("Type a complete hook line first.", true);
-  if (window.location.protocol === "file:") return showToast("Open Mixcut from its local launcher or Vercel site to use Claude.", true);
+  if (window.location.protocol === "file:") return showToast("Open 8x Variants from its local launcher or Vercel site to use Claude.", true);
   state.ai.loading = true;
   state.ai.error = "";
   render();
@@ -908,7 +908,7 @@ async function generateVideos() {
       normalizedMap[clip.id] = outputName;
     }
 
-    const zip = new StoreZipBuilder("mixcut-variations");
+    const zip = new StoreZipBuilder("8x-variants");
     const combinations = cartesian(parts.map((part) => workingFiles[part]));
     let currentAiHookId = null;
     let captionedPartMap = {};
@@ -1256,7 +1256,7 @@ function updateProgress(percent, status, count) { $("progressPercent").textConte
 function startProcessingTimer() { processingStartedAt = Date.now(); clearInterval(processingTimer); processingTimer = setInterval(renderProcessCount, 1000); }
 function stopProcessingTimer() { clearInterval(processingTimer); processingTimer = null; renderProcessCount(); }
 function renderProcessCount() { if (!processingStartedAt) return $("processCount").textContent = currentCountLabel; const seconds = Math.max(0, Math.floor((Date.now() - processingStartedAt) / 1000)); $("processCount").textContent = `${currentCountLabel} · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} elapsed`; }
-function downloadZip() { if (!state.zipBlob) return; const link = document.createElement("a"); link.href = URL.createObjectURL(state.zipBlob); link.download = `mixcut-${activeParts().length}-part-${totalCombinations()}-variations.zip`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); }
+function downloadZip() { if (!state.zipBlob) return; const link = document.createElement("a"); link.href = URL.createObjectURL(state.zipBlob); link.download = `8x-variants-${activeParts().length}-part-${totalCombinations()}-videos.zip`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); }
 let toastTimer;
 function showToast(message, error = false) { $("toast").textContent = message; $("toast").classList.toggle("error", error); $("toast").classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.remove("show"), 4200); }
 
