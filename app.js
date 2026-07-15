@@ -1027,6 +1027,7 @@ async function generateVideos() {
   const aiTemporaryHookName = "ai_hook_current.mp4";
   try {
     const { fetchFile } = FFmpeg;
+    if (ffmpegInstance?.isLoaded()) disposeVideoEngine(ffmpegInstance);
     ffmpeg = await getVideoEngine();
     const [width, height] = dimensions[$("aspectRatio").value];
     const workingFiles = Object.fromEntries(parts.map((part) => [part, state.files[part]]));
@@ -1077,6 +1078,7 @@ async function generateVideos() {
           ffmpeg.FS("writeFile", browserPreparedName, await transcodeHookInBrowser(clip.file, width, height));
           await normalizeClip(ffmpeg, browserPreparedName, outputName, width, height);
         } catch (browserCause) {
+          if (isFfmpegBusyError(browserCause)) throw processingError("The video engine did not finish its previous step. The batch was stopped safely; run it again.", browserCause);
           throw processingError(`“${clip.file.name}” could not be decoded. Browser check: ${browserCause.message} Videos saved from Messages may use HEVC; on Mac, open it in QuickTime and export/save an H.264 MP4, then upload that copy.`, nativeCause);
         }
       }
@@ -1154,6 +1156,7 @@ async function generateVideos() {
       safeUnlink(ffmpeg, "shared_body_cta.mp4");
       safeUnlink(ffmpeg, "shared_body_cta.txt");
       if (aiSource) safeUnlink(ffmpeg, aiSource.name);
+      disposeVideoEngine(ffmpeg);
     }
     stopProcessingTimer();
     setBusy(false);
@@ -1373,15 +1376,29 @@ async function getVideoEngine() {
   return ffmpegInstance;
 }
 
+function isFfmpegBusyError(error) { return /only run one command at a time/i.test(String(error?.message || error || "")); }
+function disposeVideoEngine(ffmpeg) {
+  try { if (ffmpeg?.isLoaded()) ffmpeg.exit(); } catch (error) { console.warn("Video engine cleanup failed", error); }
+  if (ffmpegInstance === ffmpeg) ffmpegInstance = null;
+  activeFfmpegCommandLogs = [];
+}
+
 async function runFfmpeg(ffmpeg, ...args) {
   activeFfmpegCommandLogs = [];
-  try {
-    await ffmpeg.run(...args);
-  } catch (error) {
-    throw new Error(ffmpegFailureDetail(error));
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      await ffmpeg.run(...args);
+      const failedLine = findFfmpegFailure(activeFfmpegCommandLogs);
+      if (failedLine) throw new Error(cleanFfmpegLine(failedLine));
+      return;
+    } catch (error) {
+      if (isFfmpegBusyError(error) && attempt < 39) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        continue;
+      }
+      throw new Error(ffmpegFailureDetail(error));
+    }
   }
-  const failedLine = findFfmpegFailure(activeFfmpegCommandLogs);
-  if (failedLine) throw new Error(cleanFfmpegLine(failedLine));
 }
 
 function cleanFfmpegLine(line) { return String(line || "").replace(/^(?:fferr|ffout|info):\s*/i, "").trim(); }
