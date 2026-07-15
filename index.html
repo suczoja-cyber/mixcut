@@ -14,7 +14,7 @@
   <header class="site-header">
     <a class="eightx-brand" href="https://www.8x.social/en" aria-label="8x home"><strong>8x</strong><span>variants</span></a>
     <nav class="brand-nav" aria-label="8x navigation"><a href="https://www.8x.social/en">Creators</a><a href="https://www.8x.social/en">Advertisers</a><a href="https://www.8x.social/en">About 8x</a></nav>
-    <div class="header-right"><span><i></i> Processed privately</span><a href="#workspace">Open builder <b>↗</b></a></div>
+    <div class="header-right"><span class="supabase-status" id="supabaseStatus"><i></i><b>Connecting private storage…</b></span><a href="#workspace">Open builder <b>↗</b></a></div>
   </header>
 
   <div class="file-warning" id="fileWarning" hidden>
@@ -67,10 +67,11 @@
     </section>
   </main>
 
-  <footer><a class="eightx-brand footer-brand" href="https://www.8x.social/en"><strong>8x</strong><span>variants</span></a><p>YOUR CLIPS. REMIXED AT SCALE.</p><span>An 8x creative tool · Processed locally.</span></footer>
+  <footer><a class="eightx-brand footer-brand" href="https://www.8x.social/en"><strong>8x</strong><span>variants</span></a><p>YOUR CLIPS. REMIXED AT SCALE.</p><span>An 8x creative tool · Rendered locally · Backed up privately.</span></footer>
   <div class="toast" id="toast" role="status"></div>
 
   <script src="vendor/ffmpeg.min.js"></script>
+  <script src="supabase-sync.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
