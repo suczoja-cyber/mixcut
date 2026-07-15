@@ -52,6 +52,11 @@ let processingTimer = null;
 let currentCountLabel = "";
 let previewGeneration = 0;
 let sectionPreviewGeneration = {};
+const projectStorageKey = "eightx-variants-current-project-v1";
+const projectDatabaseName = "eightx-variants-projects";
+let projectSaveTimer = null;
+let projectMediaDirty = false;
+let projectRestoring = true;
 state.ai.selectedStyleIds = availableCaptionStyles().map((style) => style.id);
 
 if (window.location.protocol === "file:") $("fileWarning").hidden = false;
@@ -157,6 +162,138 @@ function isPartReady(part) {
 function totalCombinations() { return activeParts().reduce((total, part) => total * partCountFor(part), 1); }
 function resetResult() { state.zipBlob = null; $("processPanel").hidden = true; }
 
+function projectSettingsSnapshot() {
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    aspectRatio: $("aspectRatio").value,
+    parts: state.parts.map((part) => ({ id: part.id, name: part.name, locked: Boolean(part.locked) })),
+    nextPartNumber: state.nextPartNumber,
+    hookMode: state.hookMode,
+    ai: {
+      copyMode: state.ai.copyMode,
+      selectedColorIds: state.ai.selectedColorIds,
+      selectedFontIds: state.ai.selectedFontIds,
+      selectedPositionIds: state.ai.selectedPositionIds,
+      selectedStyleIds: state.ai.selectedStyleIds,
+      sections: state.ai.sections,
+      expandedPickers: state.ai.expandedPickers,
+      positionAdjustments: state.ai.positionAdjustments,
+      hookText: state.ai.hookText,
+      manualHookText: state.ai.manualHookText,
+      paraphrases: state.ai.paraphrases,
+      previewVariants: state.ai.previewVariants.map((variant) => ({ id: variant.id, lineId: variant.lineId, styleId: variant.styleId, selected: variant.selected }))
+    }
+  };
+}
+
+function projectMediaSnapshot() {
+  const storeClip = (clip) => ({ id: clip.id, name: clip.file.name, type: clip.file.type, lastModified: clip.file.lastModified, file: clip.file });
+  return {
+    id: "current",
+    files: Object.fromEntries(activeParts().map((part) => [part, (state.files[part] || []).map(storeClip)])),
+    rawClip: state.ai.rawClip ? storeClip(state.ai.rawClip) : null
+  };
+}
+
+function openProjectDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(projectDatabaseName, 1);
+    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains("projects")) request.result.createObjectStore("projects", { keyPath: "id" }); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Project storage could not be opened."));
+  });
+}
+
+async function writeProjectMedia() {
+  const database = await openProjectDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction("projects", "readwrite");
+    transaction.objectStore("projects").put(projectMediaSnapshot());
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error("Source clips could not be saved."));
+  });
+  database.close();
+}
+
+async function readProjectMedia() {
+  const database = await openProjectDatabase();
+  const value = await new Promise((resolve, reject) => {
+    const request = database.transaction("projects", "readonly").objectStore("projects").get("current");
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("Saved clips could not be read."));
+  });
+  database.close();
+  return value;
+}
+
+function scheduleProjectSave(includeMedia = false) {
+  if (projectRestoring) return;
+  projectMediaDirty = projectMediaDirty || includeMedia;
+  clearTimeout(projectSaveTimer);
+  projectSaveTimer = setTimeout(async () => {
+    try { localStorage.setItem(projectStorageKey, JSON.stringify(projectSettingsSnapshot())); } catch (error) { console.warn("Project settings could not be saved", error); }
+    if (projectMediaDirty) {
+      projectMediaDirty = false;
+      try { await writeProjectMedia(); } catch (error) { console.warn("Project source clips could not be saved", error); showToast("Your settings were saved, but this browser could not keep a local copy of every source clip.", true); }
+    }
+  }, 500);
+}
+
+function restoreStoredFile(item) {
+  if (!item?.file) return null;
+  const file = item.file instanceof File ? item.file : new File([item.file], item.name || "video.mp4", { type: item.type || item.file.type || "video/mp4", lastModified: item.lastModified || Date.now() });
+  return { id: item.id || crypto.randomUUID(), file, url: URL.createObjectURL(file) };
+}
+
+function mergePositionAdjustments(saved) {
+  const defaults = defaultPositionAdjustments();
+  captionPositions.forEach((position) => { defaults[position.id] = { ...defaults[position.id], ...(saved?.[position.id] || {}) }; });
+  return defaults;
+}
+
+async function restoreProject() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(projectStorageKey) || "null"); } catch (error) { console.warn("Saved project settings could not be read", error); }
+  let media = null;
+  try { media = await readProjectMedia(); } catch (error) { console.warn("Saved project clips could not be read", error); }
+  if (saved?.version === 1 && Array.isArray(saved.parts) && saved.parts.length) {
+    state.parts = saved.parts.map((part, index) => ({ id: part.id, name: part.name || `Part ${index + 1}`, locked: part.id === "hooks" }));
+    if (!state.parts.some((part) => part.id === "hooks")) state.parts.unshift({ id: "hooks", name: "Hook", locked: true });
+    state.nextPartNumber = Math.max(Number(saved.nextPartNumber) || 2, state.parts.length + 1);
+    state.hookMode = saved.hookMode === "ai" ? "ai" : "manual";
+    if (dimensions[saved.aspectRatio]) $("aspectRatio").value = saved.aspectRatio;
+    const savedAi = saved.ai || {};
+    state.ai.copyMode = savedAi.copyMode === "claude" ? "claude" : "paste";
+    state.ai.selectedColorIds = Array.isArray(savedAi.selectedColorIds) ? savedAi.selectedColorIds : ["white"];
+    state.ai.selectedFontIds = Array.isArray(savedAi.selectedFontIds) ? savedAi.selectedFontIds : ["classic"];
+    state.ai.selectedPositionIds = Array.isArray(savedAi.selectedPositionIds) ? savedAi.selectedPositionIds : ["lower"];
+    state.ai.selectedStyleIds = Array.isArray(savedAi.selectedStyleIds) ? savedAi.selectedStyleIds : availableCaptionStyles().map((style) => style.id);
+    state.ai.sections = savedAi.sections || {};
+    state.ai.expandedPickers = savedAi.expandedPickers || {};
+    state.ai.positionAdjustments = { hooks: mergePositionAdjustments(savedAi.positionAdjustments?.hooks) };
+    state.ai.hookText = savedAi.hookText || "";
+    state.ai.manualHookText = savedAi.manualHookText || "";
+    state.ai.paraphrases = Array.isArray(savedAi.paraphrases) ? savedAi.paraphrases : [];
+    state.ai.previewVariants = Array.isArray(savedAi.previewVariants) ? savedAi.previewVariants : [];
+    state.parts.slice(1).forEach((part) => {
+      state.ai.sections[part.id] = { ...defaultSectionSettings(), ...(state.ai.sections[part.id] || {}) };
+      state.ai.positionAdjustments[part.id] = mergePositionAdjustments(savedAi.positionAdjustments?.[part.id]);
+    });
+  }
+  state.files = Object.fromEntries(state.parts.map((part) => [part.id, (media?.files?.[part.id] || []).map(restoreStoredFile).filter(Boolean)]));
+  state.ai.rawClip = restoreStoredFile(media?.rawClip);
+  state.ai.frame = null;
+  state.ai.sectionFrames = {};
+  state.ai.sectionPreviewing = {};
+  state.ai.sectionPreviewError = {};
+  projectRestoring = false;
+  render();
+  if (saved?.version === 1) showToast("Your previous project is ready to edit.");
+  if (state.hookMode === "ai" && state.ai.rawClip && state.ai.paraphrases.length) await refreshAiPreviews(true);
+  if (state.hookMode === "ai") activeParts().slice(1).forEach((part) => { if (state.files[part].length) refreshSectionPreview(part, true); });
+}
+
 function addFiles(part, files) {
   const videos = files.filter(isVideoFile);
   if (videos.length !== files.length) showToast("Some files were skipped because they aren't supported videos.", true);
@@ -164,6 +301,7 @@ function addFiles(part, files) {
     const duplicate = state.files[part].some((item) => item.file.name === file.name && item.file.size === file.size);
     if (!duplicate) state.files[part].push({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file) });
   });
+  scheduleProjectSave(true);
   resetResult();
   render();
   if (state.hookMode === "ai" && part !== "hooks") refreshSectionPreview(part, true);
@@ -180,6 +318,7 @@ function addPart() {
   state.ai.sectionPreviewing[id] = false;
   state.ai.sectionPreviewError[id] = "";
   sectionPreviewGeneration[id] = 0;
+  scheduleProjectSave(true);
   resetResult();
   render();
 }
@@ -196,6 +335,7 @@ function removePart(part) {
   delete state.ai.sectionPreviewing[part];
   delete state.ai.sectionPreviewError[part];
   delete sectionPreviewGeneration[part];
+  scheduleProjectSave(true);
   resetResult();
   render();
 }
@@ -216,6 +356,7 @@ function setRawHook(files) {
   state.ai.frame = null;
   state.ai.previewError = "";
   syncPreviewVariants();
+  scheduleProjectSave(true);
   resetResult();
   render();
   if (state.ai.paraphrases.length) refreshAiPreviews(true);
@@ -225,6 +366,7 @@ function removeFile(part, id) {
   const item = state.files[part].find((clip) => clip.id === id);
   if (item) URL.revokeObjectURL(item.url);
   state.files[part] = state.files[part].filter((clip) => clip.id !== id);
+  scheduleProjectSave(true);
   resetResult();
   render();
   if (state.hookMode === "ai" && part !== "hooks") refreshSectionPreview(part, true);
@@ -237,6 +379,7 @@ function removeRawHook() {
   state.ai.previewVariants = [];
   state.ai.previewError = "";
   previewGeneration++;
+  scheduleProjectSave(true);
   resetResult();
   render();
 }
@@ -361,6 +504,7 @@ function render() {
     $("readyText").textContent = `Still needed: ${missing.join(", ")}.`;
   }
   updateWorkflow(ready ? 3 : 2);
+  scheduleProjectSave();
 }
 
 function bindUploadEvents() {
@@ -370,7 +514,7 @@ function bindUploadEvents() {
   if ($("addPartButton")) $("addPartButton").addEventListener("click", addPart);
   document.querySelectorAll("[data-remove-video-part]").forEach((button) => button.addEventListener("click", () => removePart(button.dataset.removeVideoPart)));
   document.querySelectorAll("[data-part-name]").forEach((input) => {
-    input.addEventListener("input", () => { const item = state.parts.find((candidate) => candidate.id === input.dataset.partName); if (item) item.name = input.value; });
+    input.addEventListener("input", () => { const item = state.parts.find((candidate) => candidate.id === input.dataset.partName); if (item) { item.name = input.value; scheduleProjectSave(); } });
     input.addEventListener("change", () => renamePart(input.dataset.partName, input.value));
   });
 }
@@ -401,7 +545,7 @@ function bindAiEvents() {
     refreshSectionPreview(button.dataset.sectionDesignPart, false);
   }));
   document.querySelectorAll("[data-part-caption]").forEach((field) => {
-    field.addEventListener("input", () => { sectionSettings(field.dataset.partCaption).caption = field.value; });
+    field.addEventListener("input", () => { sectionSettings(field.dataset.partCaption).caption = field.value; scheduleProjectSave(); });
     field.addEventListener("change", () => { resetResult(); render(); refreshSectionPreview(field.dataset.partCaption, false); });
   });
   document.querySelectorAll("[data-see-more-part]").forEach((button) => button.addEventListener("click", () => {
@@ -417,11 +561,12 @@ function bindAiEvents() {
       const minimum = key === "size" ? 50 : -50;
       const maximum = key === "size" ? 200 : 50;
       state.ai.positionAdjustments[part][positionId][key] = Math.max(minimum, Math.min(maximum, Number(field.value) || 0));
+      scheduleProjectSave();
       if (part === "hooks") paintPreviewCanvases(); else paintSectionPreviewCanvases(part);
     });
     field.addEventListener("change", () => { resetResult(); render(); });
   });
-  if ($("hookText")) $("hookText").addEventListener("input", (event) => { if (state.ai.copyMode === "claude") state.ai.hookText = event.target.value; else state.ai.manualHookText = event.target.value; });
+  if ($("hookText")) $("hookText").addEventListener("input", (event) => { if (state.ai.copyMode === "claude") state.ai.hookText = event.target.value; else state.ai.manualHookText = event.target.value; scheduleProjectSave(); });
   if ($("generateParaphrases")) $("generateParaphrases").addEventListener("click", generateParaphrases);
   if ($("useManualHooks")) $("useManualHooks").addEventListener("click", applyManualHookLines);
   document.querySelectorAll("[data-caption-color]").forEach((checkbox) => checkbox.addEventListener("change", () => {
@@ -1286,4 +1431,9 @@ function downloadZip() { if (!state.zipBlob) return; const link = document.creat
 let toastTimer;
 function showToast(message, error = false) { $("toast").textContent = message; $("toast").classList.toggle("error", error); $("toast").classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.remove("show"), 4200); }
 
-render();
+restoreProject().catch((error) => {
+  console.warn("The saved project could not be restored", error);
+  projectRestoring = false;
+  render();
+  showToast("The editor opened, but the previous project could not be restored.", true);
+});
